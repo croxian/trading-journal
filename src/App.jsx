@@ -26,8 +26,38 @@ const rowToTech = (r) => ({ id: r.id, name: r.name, category: r.category, timefr
 const tradeToRow = (t) => ({ id: t.id, stock: t.stock, date: t.date, buy_price: t.buyPrice, sell_price: t.sellPrice, amount: t.amount, pnl: t.pnl, pnl_rate: t.pnlRate, reason: t.reason, technique: t.technique, memo: t.memo, chart_img: t.chartImg, ai_analysis: t.aiAnalysis, chart_desc: t.chartDesc, created_at: t.createdAt });
 const rowToTrade = (r) => ({ id: r.id, stock: r.stock, date: r.date, buyPrice: r.buy_price, sellPrice: r.sell_price, amount: r.amount, pnl: r.pnl, pnlRate: r.pnl_rate, reason: r.reason, technique: r.technique, memo: r.memo, chartImg: r.chart_img, aiAnalysis: r.ai_analysis, chartDesc: r.chart_desc, createdAt: r.created_at });
 
+// ==================== 매매 카테고리 ====================
+const TRADE_CATEGORIES = [
+  "상따",
+  "양봉종배",
+  "음봉종배",
+  "상한가하락시작",
+  "장중매매-돌파",
+  "장중매매-눌림지지",
+  "장중매매-투매",
+  "투경해제",
+  "단기과열",
+  "무증매매",
+  "악재매매",
+  "기타",
+];
+
 // ==================== 공통 유틸 ====================
-const categoryColor = (cat) => ({ "갭하락매수": "#e74c3c", "돌파매매": "#2980b9", "눌림매수": "#27ae60", "상한가하락시작": "#8e44ad", "기타": "#7f8c8d" }[cat] || "#7f8c8d");
+const categoryColor = (cat) => {
+  if (!cat) return "#7f8c8d";
+  if (cat.startsWith("장중매매")) return "#2980b9";
+  return ({
+    "상따": "#e74c3c",
+    "양봉종배": "#e67e22",
+    "음봉종배": "#8e44ad",
+    "상한가하락시작": "#c0392b",
+    "투경해제": "#27ae60",
+    "단기과열": "#f39c12",
+    "무증매매": "#16a085",
+    "악재매매": "#7f8c8d",
+    "기타": "#555",
+  }[cat] || "#7f8c8d");
+};
 const pnlColor = (v) => v > 0 ? "#4caf50" : v < 0 ? "#e74c3c" : "#aaa";
 
 const claude = async (system, userContent, maxTokens = 1000) => {
@@ -663,12 +693,28 @@ function JournalTab({ techniques }) {
               <div key={f}><div style={label11}>{p}</div>{inp(f, p, t)}</div>
             ))}
             <div>
-              <div style={label11}>기법 분류</div>
-              <select value={form.technique} onChange={e => setForm(p => ({ ...p, technique: e.target.value }))}
+              <div style={label11}>매매 카테고리</div>
+              <select
+                value={TRADE_CATEGORIES.includes(form.technique) ? form.technique : (form.technique ? "기타" : "")}
+                onChange={e => {
+                  const v = e.target.value;
+                  if (v !== "기타") setForm(p => ({ ...p, technique: v }));
+                  else setForm(p => ({ ...p, technique: "기타" }));
+                }}
                 style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, textAlign: "left" }}>
                 <option value="">선택 안함</option>
-                {techniques.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
+                {TRADE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
+              {/* 기타 선택 시: 직접 입력창 표시. 입력값은 그대로 technique에 저장됨 */}
+              {(!TRADE_CATEGORIES.slice(0, -1).includes(form.technique) && form.technique !== "") && (
+                <input
+                  value={form.technique === "기타" ? "" : form.technique}
+                  onChange={e => setForm(p => ({ ...p, technique: e.target.value || "기타" }))}
+                  placeholder="카테고리 직접 입력..."
+                  autoFocus
+                  style={{ width: "100%", marginTop: 6, background: "#13151f", border: "1px solid #4f8ef7", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box" }}
+                />
+              )}
             </div>
           </div>
           {[["reason","매매 이유","왜 이 자리에서 매수/매도했는지..."],["memo","메모","추가 메모..."]].map(([f,lbl,ph]) => (
@@ -704,7 +750,7 @@ function JournalTab({ techniques }) {
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <span style={{ fontWeight: 700 }}>{t.stock}</span>
                   <span style={{ fontSize: 12, color: "#666" }}>{t.date}</span>
-                  {t.technique && <span style={{ background: "#2a2d3a", fontSize: 11, padding: "2px 7px", borderRadius: 4, color: "#aaa" }}>{t.technique}</span>}
+                  {t.technique && <span style={{ background: categoryColor(t.technique), fontSize: 11, padding: "2px 7px", borderRadius: 4, color: "#fff" }}>{t.technique}</span>}
                   <span style={{ marginLeft: "auto", fontWeight: 700, color: pnlColor(parseFloat(t.pnlRate)) }}>{parseFloat(t.pnlRate) > 0 ? "+" : ""}{t.pnlRate}%</span>
                 </div>
                 {t.reason && <div style={{ marginTop: 5, fontSize: 12, color: "#666", textAlign: "left" }}>{t.reason.slice(0, 60)}...</div>}
@@ -720,7 +766,7 @@ function JournalTab({ techniques }) {
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
               <span style={{ fontSize: 18, fontWeight: 700 }}>{selected.stock}</span>
               <span style={{ fontSize: 13, color: "#666" }}>{selected.date}</span>
-              {selected.technique && <span style={{ background: "#2a2d3a", fontSize: 12, padding: "2px 8px", borderRadius: 4, color: "#aaa" }}>{selected.technique}</span>}
+              {selected.technique && <span style={{ background: categoryColor(selected.technique), fontSize: 12, padding: "2px 8px", borderRadius: 4, color: "#fff" }}>{selected.technique}</span>}
               <span style={{ marginLeft: "auto", fontSize: 18, fontWeight: 700, color: pnlColor(parseFloat(selected.pnlRate)) }}>{parseFloat(selected.pnlRate) > 0 ? "+" : ""}{selected.pnlRate}%</span>
               <button onClick={() => handleDelete(selected.id)} style={{ padding: "4px 10px", background: "#3a1a1a", border: "none", color: "#e74c3c", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>삭제</button>
             </div>
