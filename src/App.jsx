@@ -79,6 +79,26 @@ const parseJSON = async (text) => {
 };
 const toBase64 = (file) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = () => rej(new Error("파일 읽기 실패")); r.readAsDataURL(file); });
 
+// 이미지를 JPEG로 압축/리사이즈 (대용량 이미지 → API 요청 크기 초과 방지)
+const compressImage = (file, maxPx = 2048) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onerror = () => reject(new Error("파일 읽기 실패"));
+  reader.onload = (ev) => {
+    const img = new Image();
+    img.onerror = () => reject(new Error("이미지 로드 실패"));
+    img.onload = () => {
+      const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL("image/jpeg", 0.92).split(",")[1]);
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+});
+
 const box = { background: "#1a1d27", borderRadius: 10, border: "1px solid #2a2d3a", padding: "14px 16px" };
 const label11 = { fontSize: 11, color: "#555", marginBottom: 3, textAlign: "left" };
 const val14 = { fontSize: 14, color: "#ddd", background: "#13151f", padding: "8px 10px", borderRadius: 6, whiteSpace: "pre-wrap", lineHeight: 1.6, textAlign: "left" };
@@ -607,8 +627,8 @@ function JournalTab({ techniques }) {
   const processImage = async (file, mode) => {
     setImgLoading(true); setFeedback("");
     try {
-      const b64 = await toBase64(file);
-      const mediaType = file.type || "image/png";
+      const b64 = await compressImage(file);
+      const mediaType = "image/jpeg";
       if (mode === "0606") {
         setChartImg(b64);
         const raw = await claude("JSON만 출력.", [
