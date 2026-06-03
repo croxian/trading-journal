@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from "react";
 // ==================== 상수 / 설정 ====================
 const TABS = ["🏠 대시보드", "📝 매매일지", "📊 통계", "📚 강의록"];
 const SB_URL = "https://vbdtrynddjryxcpgpisf.supabase.co";
-const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZiZHRyeW5kZGpyeXhjcGdwaXNmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0MDI0MDEsImV4cCI6MjA5NTk3ODQwMX0.p3Bs8i-sNz6GodYIXLg1BzdrTxAc9-jB2dZRaOKCW3M";
+const SB_KEY = import.meta.env.VITE_SUPABASE_KEY;
 const HDR = { "Content-Type": "application/json", "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Prefer": "resolution=merge-duplicates" };
 
 // ==================== Supabase 유틸 ====================
@@ -198,7 +198,132 @@ function DashboardTab({ onNavigate }) {
   );
 }
 
-// ==================== 강의록 탭 ====================
+// ==================== Notion 동기화 ====================
+const NOTION_TOKEN = import.meta.env.VITE_NOTION_TOKEN;
+const NOTION_PARENT_ID = "373c885af5a4812ca6e7fab7e018abfe";
+const NOTION_HDR = { "Authorization": `Bearer ${NOTION_TOKEN}`, "Content-Type": "application/json", "Notion-Version": "2022-06-28" };
+
+const notionCreatePage = async (tech) => {
+  const blocks = [];
+  const addBlock = (label, content) => {
+    if (!content) return;
+    blocks.push({ object: "block", type: "heading_3", heading_3: { rich_text: [{ type: "text", text: { content: label } }] } });
+    blocks.push({ object: "block", type: "paragraph", paragraph: { rich_text: [{ type: "text", text: { content: String(content) } }] } });
+  };
+
+  addBlock("📌 매수 조건", tech.entry?.condition);
+  addBlock("📍 매수 위치", tech.entry?.position);
+  addBlock("⚠️ 주의사항", tech.entry?.caution);
+  addBlock("✅ 익절 조건", tech.exit?.profit);
+  addBlock("🛑 손절 조건", tech.exit?.loss);
+  addBlock("📈 매수 전 구조", tech.pattern?.before);
+  addBlock("⚡ 매수 트리거", tech.pattern?.trigger);
+  addBlock("🔮 예상 흐름", tech.pattern?.after);
+  addBlock("📝 메모", tech.notes);
+
+  if (tech.rawInput) {
+    blocks.push({ object: "block", type: "heading_3", heading_3: { rich_text: [{ type: "text", text: { content: "📄 원본 텍스트" } }] } });
+    // Notion 블록 하나당 2000자 제한 → 청크 분할
+    const raw = String(tech.rawInput);
+    for (let i = 0; i < raw.length; i += 1900) {
+      blocks.push({ object: "block", type: "paragraph", paragraph: { rich_text: [{ type: "text", text: { content: raw.slice(i, i + 1900) } }] } });
+    }
+  }
+
+  const title = `[${tech.category || "기타"}] ${tech.name || "이름없음"}`;
+  const res = await fetch("https://api.notion.com/v1/pages", {
+    method: "POST", headers: NOTION_HDR,
+    body: JSON.stringify({
+      parent: { page_id: NOTION_PARENT_ID },
+      properties: { title: { title: [{ type: "text", text: { content: title } }] } },
+      children: blocks.slice(0, 100)
+    })
+  });
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  return res.json();
+};
+
+const notionGetChildren = async (pageId) => {
+  const res = await fetch(`https://api.notion.com/v1/blocks/${pageId}/children?page_size=100`, { headers: NOTION_HDR });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.results || [];
+};
+
+const notionDeletePage = async (pageId) => {
+  await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
+    method: "PATCH", headers: NOTION_HDR,
+    body: JSON.stringify({ archived: true })
+  });
+};
+
+// ==================== 동기화 모달 ====================
+function SyncModal({ onClose }) {
+  const [log, setLog] = useState([]);
+  const [status, setStatus] = useState("idle");
+  const addLog = (msg, color = "#aaa") => setLog(p => [...p, { msg, color }]);
+
+  const runSync = async () => {
+    setStatus("running"); setLog([]);
+    try {
+      // 1. Supabase에서 전체 기법 로드
+      addLog("📥 Supabase에서 기법 로드 중...");
+      const rows = await sbGet("techniques");
+      const techs = rows.map(rowToTech);
+      addLog(`✅ ${techs.length}개 기법 로드 완료`, "#4caf50");
+
+      // 2. 기존 Notion 하위 페이지 삭제
+      addLog("🗑️ 기존 Notion 페이지 삭제 중...");
+      const children = await notionGetChildren(NOTION_PARENT_ID);
+      const pages = children.filter(b => b.type === "child_page");
+      for (const p of pages) {
+        await notionDeletePage(p.id);
+      }
+      addLog(`✅ ${pages.length}개 기존 페이지 삭제 완료`, "#4caf50");
+
+      // 3. 전체 재생성
+      addLog("📝 Notion 페이지 생성 중...");
+      let done = 0;
+      for (const tech of techs) {
+        await notionCreatePage(tech);
+        done++;
+        addLog(`  [${done}/${techs.length}] ${tech.name}`, "#888");
+      }
+      addLog("🎉 동기화 완료!", "#4f8ef7");
+      setStatus("done");
+    } catch (e) {
+      addLog(`❌ 오류: ${e.message}`, "#e74c3c");
+      setStatus("error");
+    }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+      <div style={{ background: "#1a1d27", border: "1px solid #2a2d3a", borderRadius: 12, padding: 24, width: 500, maxHeight: "80vh", display: "flex", flexDirection: "column" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <span style={{ fontSize: 16, fontWeight: 700 }}>🔄 Notion 동기화</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "#aaa", cursor: "pointer", fontSize: 18 }}>✕</button>
+        </div>
+        <div style={{ fontSize: 13, color: "#888", marginBottom: 16 }}>
+          Supabase 기법 전체를 Notion에 원본 그대로 재생성합니다.<br/>
+          기존 Notion 페이지는 모두 삭제 후 재작성됩니다.
+        </div>
+        {status === "idle" && (
+          <button onClick={runSync} style={{ padding: "10px 24px", background: "#4f8ef7", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 14 }}>
+            동기화 시작
+          </button>
+        )}
+        <div style={{ flex: 1, overflow: "auto", marginTop: 12, background: "#13151f", borderRadius: 8, padding: 12, fontFamily: "monospace", fontSize: 12, minHeight: 120 }}>
+          {log.map((l, i) => <div key={i} style={{ color: l.color, marginBottom: 2 }}>{l.msg}</div>)}
+          {status === "running" && <div style={{ color: "#aaa" }}>실행 중...</div>}
+        </div>
+        {(status === "done" || status === "error") && (
+          <button onClick={onClose} style={{ marginTop: 12, padding: "8px 20px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>닫기</button>
+        )}
+      </div>
+    </div>
+  );
+}
 const LECTURE_SYSTEM = `단기 주식 매매 강의록을 구조화하는 전문가. 반드시 JSON만 출력.
 입력 전처리: 인사말/감사/광고/잡담 제거.
 {"name":"기법 이름","category":"갭하락매수|돌파매매|눌림매수|상한가하락시작|기타","timeframe":"3분봉 등","entry":{"condition":"","position":"","caution":""},"exit":{"profit":"","loss":""},"pattern":{"before":"","trigger":"","after":""},"tags":[],"notes":""}`;
@@ -693,6 +818,7 @@ function StatsTab() {
 export default function App() {
   const [activeTab, setActiveTab] = useState(0);
   const [techniques, setTechniques] = useState([]);
+  const [showSync, setShowSync] = useState(false);
 
   useEffect(() => {
     sbGet("techniques").then(rows => setTechniques(rows.map(rowToTech))).catch(() => {});
@@ -700,6 +826,7 @@ export default function App() {
 
   return (
     <div style={{ fontFamily: "sans-serif", background: "#0f1117", minHeight: "100vh", color: "#e0e0e0" }}>
+      {showSync && <SyncModal onClose={() => setShowSync(false)} />}
       <div style={{ background: "#1a1d27", borderBottom: "1px solid #2a2d3a", padding: "0 20px", display: "flex", alignItems: "center" }}>
         <span style={{ fontSize: 15, fontWeight: 700, color: "#fff", padding: "14px 0", marginRight: 20 }}>📈 매매 시스템</span>
         {TABS.map((t, i) => (
@@ -707,6 +834,10 @@ export default function App() {
             style={{ padding: "14px 18px", background: "none", border: "none", borderBottom: activeTab === i ? "2px solid #4f8ef7" : "2px solid transparent",
               color: activeTab === i ? "#fff" : "#666", cursor: "pointer", fontSize: 14, fontWeight: activeTab === i ? 600 : 400 }}>{t}</button>
         ))}
+        <button onClick={() => setShowSync(true)}
+          style={{ marginLeft: "auto", padding: "6px 12px", background: "#2a2d3a", border: "1px solid #3a3d4a", color: "#aaa", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>
+          📒 Notion 동기화
+        </button>
       </div>
       <div style={{ padding: 20, maxWidth: 960, margin: "0 auto" }}>
         {activeTab === 0 && <DashboardTab onNavigate={setActiveTab} />}
