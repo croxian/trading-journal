@@ -586,12 +586,13 @@ function JournalTab({ techniques }) {
   const [pending0397, setPending0397] = useState([]);
   const [bulk0397Date, setBulk0397Date] = useState("");
   const [showStockDrop, setShowStockDrop] = useState(false);
-  const viewRef = useRef(view);
-  const inputModeRef = useRef(inputMode);
-  const processImageRef = useRef(null);
+  const pasteZoneRef = useRef(null);
 
-  useEffect(() => { viewRef.current = view; }, [view]);
-  useEffect(() => { inputModeRef.current = inputMode; }, [inputMode]);
+  useEffect(() => {
+    if (view === "add" && (inputMode === "img0606" || inputMode === "img0397")) {
+      pasteZoneRef.current?.focus();
+    }
+  }, [view, inputMode]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -639,27 +640,20 @@ function JournalTab({ techniques }) {
     } catch (e) { setFeedback(`❌ ${e.message}`); }
     setImgLoading(false);
   };
-  processImageRef.current = processImage;
-
-  useEffect(() => {
-    const handler = async (e) => {
-      if (viewRef.current !== "add") return;
-      const mode = inputModeRef.current;
-      if (mode !== "img0606" && mode !== "img0397") return;
-      const items = e.clipboardData?.items;
-      if (!items) return;
-      for (const item of Array.from(items)) {
-        if (item.type.startsWith("image/")) {
-          e.preventDefault();
-          const file = item.getAsFile();
-          if (file) processImageRef.current(file, mode === "img0606" ? "0606" : "0397");
-          break;
-        }
+  const handlePaste = async (e) => {
+    const mode = inputMode === "img0606" ? "0606" : "0397";
+    const tryFile = async (file) => { if (file?.type.startsWith("image/")) { e.preventDefault(); await processImage(file, mode); return true; } return false; };
+    if (e.clipboardData?.items) {
+      for (const item of Array.from(e.clipboardData.items)) {
+        if (await tryFile(item.getAsFile())) return;
       }
-    };
-    window.addEventListener("paste", handler);
-    return () => window.removeEventListener("paste", handler);
-  }, []);
+    }
+    if (e.clipboardData?.files) {
+      for (const file of Array.from(e.clipboardData.files)) {
+        if (await tryFile(file)) return;
+      }
+    }
+  };
 
   const handleImageExtract = async (e, type) => {
     const file = e.target.files[0]; if (!file) return;
@@ -741,7 +735,13 @@ function JournalTab({ techniques }) {
           </div>
 
           {(inputMode === "img0606" || inputMode === "img0397") && (
-            <div style={{ marginBottom: 14 }}>
+            <div
+              ref={pasteZoneRef}
+              tabIndex={0}
+              onPaste={handlePaste}
+              onClick={() => pasteZoneRef.current?.focus()}
+              style={{ marginBottom: 14, outline: "none" }}
+            >
               <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                 <label style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "8px 16px", background: "#2a2d3a", border: "1px dashed #4f8ef7", borderRadius: 8, cursor: "pointer", fontSize: 13, color: "#aaa" }}>
                   📎 {inputMode === "img0606" ? "[0606] 차트 이미지" : "[0397] 매매내역 이미지"}
