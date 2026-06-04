@@ -677,6 +677,7 @@ function JournalTab({ techniques }) {
   const [pptLoading, setPptLoading] = useState(false);
   const [pptProgress, setPptProgress] = useState("");
   const [detailImgLoading, setDetailImgLoading] = useState(false);
+  const [fill0397Loading, setFill0397Loading] = useState(false);
   const pasteZoneRef = useRef(null);
 
   useEffect(() => {
@@ -805,6 +806,62 @@ function JournalTab({ techniques }) {
       setFeedback(`✅ ${newTrades.length}개 저장됨`);
       setView("list");
     } catch (e) { setFeedback(`❌ ${e.message}`); }
+  };
+
+  const extract0397Trades = async (file) => {
+    const b64 = await compressImage(file);
+    const raw = await claude("JSON만 출력.", [
+      { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
+      { type: "text", text: `키움 [0397] 매매일지에서 JSON 추출:\n{"date":"YYYY-MM-DD 또는 null","trades":[{"stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}` }
+    ], 1200);
+    const p = await parseJSON(raw);
+    return Array.isArray(p) ? p : (p.trades || []);
+  };
+
+  const matchStock = (a, b) => {
+    if (!a || !b) return false;
+    const n = s => s.replace(/\s+/g, "").toLowerCase();
+    return n(a) === n(b) || n(a).includes(n(b)) || n(b).includes(n(a));
+  };
+
+  const fillFormFrom0397 = async (file) => {
+    setFill0397Loading(true); setFeedback("");
+    try {
+      const trades = await extract0397Trades(file);
+      const match = form.stock
+        ? trades.find(t => matchStock(t.stock, form.stock))
+        : trades[0];
+      if (match) {
+        setForm(f => ({
+          ...f,
+          buyPrice: match.buyPrice ?? f.buyPrice,
+          sellPrice: match.sellPrice ?? f.sellPrice,
+          pnl: match.pnl ?? f.pnl,
+          pnlRate: match.pnlRate ?? f.pnlRate,
+          amount: match.buyAmount ?? f.amount,
+        }));
+        setFeedback("✅ 재무 데이터 채워짐");
+      } else {
+        setFeedback(`❌ '${form.stock}' 매칭 종목 없음 (추출: ${trades.map(t => t.stock).join(", ")})`);
+      }
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+    setFill0397Loading(false);
+  };
+
+  const fillPptFrom0397 = async (file) => {
+    setFill0397Loading(true); setFeedback("");
+    try {
+      const trades = await extract0397Trades(file);
+      let matched = 0;
+      setPendingPpt(prev => prev.map(entry => {
+        const m = trades.find(t => matchStock(t.stock, entry.stock));
+        if (!m) return entry;
+        matched++;
+        return { ...entry, buyPrice: m.buyPrice ?? "", sellPrice: m.sellPrice ?? "", pnl: m.pnl ?? "", pnlRate: m.pnlRate ?? "", amount: m.buyAmount ?? "" };
+      }));
+      setFeedback(`✅ ${matched}개 매칭 완료 (전체 ${pendingPpt.length}건)`);
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+    setFill0397Loading(false);
   };
 
   const processPptFile = async (file) => {
@@ -1015,6 +1072,15 @@ function JournalTab({ techniques }) {
                       </div>
                     ))}
                   </div>
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+                    <label style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 14px", background: "#2a2d3a", border: "1px solid #3a3d4a", borderRadius: 6, cursor: "pointer", fontSize: 12, color: "#aaa" }}>
+                      📋 0397로 재무 일괄 매칭
+                      <input type="file" accept="image/*" style={{ display: "none" }}
+                        onChange={async e => { const f = e.target.files[0]; if (f) { await fillPptFrom0397(f); e.target.value = ""; } }} />
+                    </label>
+                    {fill0397Loading && <span style={{ fontSize: 12, color: "#aaa" }}>⏳ 매칭 중...</span>}
+                    {!fill0397Loading && feedback && <span style={{ fontSize: 12, color: feedback.startsWith("✅") ? "#4caf50" : "#e74c3c" }}>{feedback}</span>}
+                  </div>
                   <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                     <button onClick={handleBulkSavePpt} style={{ padding: "8px 20px", background: "#4f8ef7", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>전체 저장</button>
                     <button onClick={() => { setPendingPpt([]); setFeedback(""); }} style={{ padding: "8px 14px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>취소</button>
@@ -1099,6 +1165,15 @@ function JournalTab({ techniques }) {
                   <div style={label11}>날짜</div>
                   <input type="date" value={form.date || ""} onChange={e => setForm(p => ({ ...p, date: e.target.value }))}
                     style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box", colorScheme: "dark" }} />
+                </div>
+                <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 8, padding: "6px 0 2px" }}>
+                  <span style={{ fontSize: 11, color: "#555" }}>재무 데이터 (직접 입력 또는 0397로 채우기)</span>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 10px", background: "#2a2d3a", border: "1px solid #3a3d4a", borderRadius: 5, cursor: "pointer", fontSize: 11, color: "#aaa" }}>
+                    📋 0397 이미지
+                    <input type="file" accept="image/*" style={{ display: "none" }}
+                      onChange={async e => { const f = e.target.files[0]; if (f) { await fillFormFrom0397(f); e.target.value = ""; } }} />
+                  </label>
+                  {fill0397Loading && <span style={{ fontSize: 11, color: "#aaa" }}>⏳</span>}
                 </div>
                 {[["buyPrice","매수가 *","number"],["sellPrice","매도가","number"],["amount","매입금액","number"],["pnl","실현손익","number"],["pnlRate","수익률 (%)","number"]].map(([f,p,t]) => (
                   <div key={f}><div style={label11}>{p}</div>{inp(f, p, t)}</div>
