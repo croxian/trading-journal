@@ -180,6 +180,17 @@ const parsePptxToSlides = async (file) => {
 const parseXlsCsvToTrades = async (file) => {
   const ext = file.name.split('.').pop().toLowerCase();
   const num = s => parseFloat(String(s || 0).replace(/,/g, '').replace(/^'/, '')) || 0;
+  // 따옴표 안의 쉼표를 올바르게 처리하는 CSV 파서
+  const csvLine = (line) => {
+    const fields = []; let field = ''; let inQ = false;
+    for (const c of line) {
+      if (c === '"') { inQ = !inQ; }
+      else if (c === ',' && !inQ) { fields.push(field.trim()); field = ''; }
+      else { field += c; }
+    }
+    fields.push(field.trim());
+    return fields;
+  };
   let rows = [];
   if (ext === 'csv') {
     let text = await file.text();
@@ -192,9 +203,9 @@ const parseXlsCsvToTrades = async (file) => {
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
     const hi = lines.findIndex(l => l.includes('종목명'));
     if (hi === -1) throw new Error('종목명 컬럼 없음');
-    const headers = lines[hi].split(',').map(h => h.replace(/"/g, '').trim());
+    const headers = csvLine(lines[hi]);
     for (let i = hi + 1; i < lines.length; i++) {
-      const vals = lines[i].split(',').map(v => v.replace(/"/g, '').trim());
+      const vals = csvLine(lines[i]);
       if (!vals.some(Boolean)) continue;
       const row = {}; headers.forEach((h, j) => { row[h] = vals[j] || ''; });
       rows.push(row);
