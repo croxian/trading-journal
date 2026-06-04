@@ -179,25 +179,22 @@ const parsePptxToSlides = async (file) => {
 
 const parseXlsCsvToTrades = async (file) => {
   const ext = file.name.split('.').pop().toLowerCase();
-  const num = s => parseFloat(String(s || 0).replace(/,/g, '')) || 0;
+  const num = s => parseFloat(String(s || 0).replace(/,/g, '').replace(/^'/, '')) || 0;
   let rows = [];
   if (ext === 'csv') {
-    // UTF-8 시도 후 한글 헤더 없으면 EUC-KR로 재시도 (키움 기본 인코딩)
     let text = await file.text();
     if (!text.includes('종목')) {
       text = await new Promise((res, rej) => {
-        const r = new FileReader();
-        r.onload = () => res(r.result);
-        r.onerror = rej;
+        const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej;
         r.readAsText(file, 'EUC-KR');
       });
     }
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
     const hi = lines.findIndex(l => l.includes('종목명'));
-    if (hi === -1) throw new Error('CSV에서 종목명 컬럼을 찾을 수 없음');
-    const headers = lines[hi].split(',').map(h => h.replace(/"/g,'').trim());
+    if (hi === -1) throw new Error('종목명 컬럼 없음');
+    const headers = lines[hi].split(',').map(h => h.replace(/"/g, '').trim());
     for (let i = hi + 1; i < lines.length; i++) {
-      const vals = lines[i].split(',').map(v => v.replace(/"/g,'').trim());
+      const vals = lines[i].split(',').map(v => v.replace(/"/g, '').trim());
       if (!vals.some(Boolean)) continue;
       const row = {}; headers.forEach((h, j) => { row[h] = vals[j] || ''; });
       rows.push(row);
@@ -207,17 +204,49 @@ const parseXlsCsvToTrades = async (file) => {
     const wb = XLSX.read(ab, { type: 'array' });
     rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { raw: false, defval: '' });
   }
-  return rows
+
+  // 컬럼명 정규화 (키움 형식 포함)
+  const mapped = rows
     .filter(r => r['종목명'] || r['종목'])
     .map(r => ({
-      stock: r['종목명'] || r['종목'] || '',
-      buyPrice: num(r['매입단가'] || r['매수가'] || r['매입가격'] || r['평균매입가']),
-      sellPrice: num(r['매도단가'] || r['매도가'] || r['매도가격']),
+      stock: (r['종목명'] || r['종목'] || '').replace(/^'/, '').trim(),
+      date: (r['일자'] || r['날짜'] || '').replace(/\//g, '-').trim(),
+      qty: num(r['수량']),
+      buyAmt: num(r['매입금액'] || r['매수금액']),
+      sellAmt: num(r['매도금액'] || r['매도체결금액']),
+      buyPrice: num(r['매입가'] || r['매입단가'] || r['매수가'] || r['매입가격'] || r['평균매입가']),
+      sellPrice: num(r['매도체결가'] || r['매도단가'] || r['매도가'] || r['매도가격']),
       pnl: num(r['실현손익'] || r['매매손익'] || r['손익금액']),
-      pnlRate: num(r['수익률'] || r['손익률']),
-      buyAmount: num(r['매입금액'] || r['매수금액']),
     }))
     .filter(r => r.stock);
+
+  // 날짜 + 종목명으로 그룹핑 후 머지
+  const groups = {};
+  for (const r of mapped) {
+    const key = `${r.date}|${r.stock}`;
+    (groups[key] = groups[key] || []).push(r);
+  }
+
+  return Object.values(groups).map(grp => {
+    const totalQty  = grp.reduce((s, r) => s + r.qty, 0);
+    const totalBuy  = grp.reduce((s, r) => s + r.buyAmt, 0);
+    const totalSell = grp.reduce((s, r) => s + r.sellAmt, 0);
+    const totalPnl  = grp.reduce((s, r) => s + r.pnl, 0);
+    // 가중평균: Σ금액 / Σ수량
+    const avgBuyPrice  = totalQty > 0 ? totalBuy  / totalQty : grp[0].buyPrice;
+    const avgSellPrice = totalQty > 0 ? totalSell / totalQty : grp[0].sellPrice;
+    // 수익률 = 실현손익 / 매입금액 × 100
+    const pnlRate = totalBuy > 0 ? (totalPnl / totalBuy) * 100 : 0;
+    return {
+      stock: grp[0].stock,
+      date: grp[0].date,
+      buyPrice:  Math.round(avgBuyPrice),
+      sellPrice: Math.round(avgSellPrice),
+      pnl:       Math.round(totalPnl),
+      pnlRate:   parseFloat(pnlRate.toFixed(2)),
+      buyAmount: Math.round(totalBuy),
+    };
+  });
 };
 
 const box = { background: "#1a1d27", borderRadius: 10, border: "1px solid #2a2d3a", padding: "14px 16px" };
@@ -939,7 +968,9 @@ function JournalTab({ techniques }) {
       const trades = await parseXlsCsvToTrades(file);
       let matched = 0;
       setPendingPpt(prev => prev.map(entry => {
-        const m = trades.find(t => matchStock(t.stock, entry.stock));
+        // 날짜+종목명 우선 매칭, 없으면 종목명만
+        const m = trades.find(t => matchStock(t.stock, entry.stock) && t.date === entry.date)
+                || trades.find(t => matchStock(t.stock, entry.stock));
         if (!m) return entry;
         matched++;
         return { ...entry, buyPrice: m.buyPrice || "", sellPrice: m.sellPrice || "", pnl: m.pnl || "", pnlRate: m.pnlRate || "", amount: m.buyAmount || "" };
