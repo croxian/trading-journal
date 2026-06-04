@@ -12,6 +12,18 @@ const sbGet = async (table) => {
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 };
+const TRADE_LIST_FIELDS = "id,stock,date,buy_price,sell_price,amount,pnl,pnl_rate,reason,technique,memo,ai_analysis,chart_desc,created_at";
+const sbGetTrades = async () => {
+  const r = await fetch(`${SB_URL}/rest/v1/trades?select=${TRADE_LIST_FIELDS}&order=id.asc`, { headers: HDR });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+};
+const sbGetChartImg = async (id) => {
+  const r = await fetch(`${SB_URL}/rest/v1/trades?id=eq.${id}&select=chart_img`, { headers: HDR });
+  if (!r.ok) return null;
+  const d = await r.json();
+  return d[0]?.chart_img || null;
+};
 const sbUpsert = async (table, rows) => {
   const r = await fetch(`${SB_URL}/rest/v1/${table}`, { method: "POST", headers: HDR, body: JSON.stringify(rows) });
   if (!r.ok) throw new Error(await r.text());
@@ -664,6 +676,7 @@ function JournalTab({ techniques }) {
   const [pendingPpt, setPendingPpt] = useState([]);
   const [pptLoading, setPptLoading] = useState(false);
   const [pptProgress, setPptProgress] = useState("");
+  const [detailImgLoading, setDetailImgLoading] = useState(false);
   const pasteZoneRef = useRef(null);
 
   useEffect(() => {
@@ -674,10 +687,18 @@ function JournalTab({ techniques }) {
 
   const load = useCallback(async () => {
     setLoading(true);
-    try { const rows = await sbGet("trades"); setTrades(rows.map(rowToTrade).sort((a,b) => b.id - a.id)); }
+    try { const rows = await sbGetTrades(); setTrades(rows.map(rowToTrade).sort((a,b) => b.id - a.id)); }
     catch (e) { setFeedback(`❌ 로드 실패: ${e.message}`); }
     setLoading(false);
   }, []);
+
+  const openDetail = async (trade) => {
+    setSelected(trade); setView("detail"); setFeedback(""); setEditTrade(false);
+    setDetailImgLoading(true);
+    const img = await sbGetChartImg(trade.id);
+    setSelected(prev => prev?.id === trade.id ? { ...prev, chartImg: img } : prev);
+    setDetailImgLoading(false);
+  };
   useEffect(() => { load(); }, [load]);
 
   const recentStocks = [...new Set(trades.map(t => t.stock).filter(Boolean))].slice(0, 10);
@@ -1134,7 +1155,7 @@ function JournalTab({ techniques }) {
           ? <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>매매 기록 없음</div>
           : <div style={{ display: "grid", gap: 8 }}>
             {trades.map(t => (
-              <div key={t.id} onClick={() => { setSelected(t); setView("detail"); }}
+              <div key={t.id} onClick={() => openDetail(t)}
                 style={{ ...box, cursor: "pointer" }}
                 onMouseEnter={e => e.currentTarget.style.borderColor = "#4f8ef7"}
                 onMouseLeave={e => e.currentTarget.style.borderColor = "#2a2d3a"}>
@@ -1177,7 +1198,15 @@ function JournalTab({ techniques }) {
               </div>
               {selected.reason && <div style={{ marginBottom: 10 }}><div style={label11}>매매 이유</div><div style={val14}>{selected.reason}</div></div>}
               {selected.memo && <div style={{ marginBottom: 10 }}><div style={label11}>메모</div><div style={val14}>{selected.memo}</div></div>}
-              {selected.chartImg && <div style={{ marginBottom: 10 }}><div style={label11}>차트</div><img src={`data:image/jpeg;base64,${selected.chartImg}`} alt="chart" style={{ maxWidth: "100%", borderRadius: 6 }} /></div>}
+              <div style={{ marginBottom: 10 }}>
+                <div style={label11}>차트</div>
+                {detailImgLoading
+                  ? <div style={{ color: "#555", fontSize: 12, padding: "8px 0" }}>⏳ 이미지 로딩 중...</div>
+                  : selected.chartImg
+                    ? <img src={`data:image/jpeg;base64,${selected.chartImg}`} alt="chart" style={{ maxWidth: "100%", borderRadius: 6 }} />
+                    : <div style={{ color: "#555", fontSize: 12, padding: "8px 0" }}>차트 없음</div>
+                }
+              </div>
               {selected.aiAnalysis && <div><div style={label11}>🤖 AI 분석</div><div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad" }}>{selected.aiAnalysis}</div></div>}
               {feedback && <div style={{ marginTop: 8, fontSize: 13, color: "#4caf50" }}>{feedback}</div>}
             </div>
