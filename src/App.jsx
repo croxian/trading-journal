@@ -60,13 +60,23 @@ const categoryColor = (cat) => {
 };
 const pnlColor = (v) => v > 0 ? "#4caf50" : v < 0 ? "#e74c3c" : "#aaa";
 
+const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_KEY || "";
 const claude = async (system, userContent, maxTokens = 1000) => {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: maxTokens, system, messages: [{ role: "user", content: userContent }] })
-  });
+  const headers = { "Content-Type": "application/json", "anthropic-dangerous-direct-browser-access": "true" };
+  if (ANTHROPIC_KEY) headers["x-api-key"] = ANTHROPIC_KEY;
+  let res;
+  try {
+    res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST", headers,
+      body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: maxTokens, system, messages: [{ role: "user", content: userContent }] })
+    });
+  } catch (e) { throw new Error(`네트워크 오류 (CORS/연결): ${e.message}`); }
+  if (!res.ok) {
+    let msg = res.status;
+    try { const d = await res.json(); msg = d.error?.message || msg; } catch {}
+    throw new Error(`API 오류 ${res.status}: ${msg}`);
+  }
   const data = await res.json();
-  if (data.error) throw new Error(`API 오류: ${data.error.message}`);
   return data.content?.map(b => b.text || "").join("") || "";
 };
 const parseJSON = async (text) => {
@@ -661,18 +671,23 @@ function JournalTab({ techniques }) {
     setImgLoading(false);
   };
   const handlePaste = async (e) => {
-    const mode = inputMode === "img0606" ? "0606" : "0397";
-    const tryFile = async (file) => { if (file?.type.startsWith("image/")) { e.preventDefault(); await processImage(file, mode); return true; } return false; };
+    // 클립보드 데이터는 await 이전에 동기적으로 모두 수집해야 함
+    const imageFiles = [];
     if (e.clipboardData?.items) {
       for (const item of Array.from(e.clipboardData.items)) {
-        if (await tryFile(item.getAsFile())) return;
+        if (item.type.startsWith("image/") || item.kind === "file") {
+          const f = item.getAsFile();
+          if (f) imageFiles.push(f);
+        }
       }
     }
-    if (e.clipboardData?.files) {
-      for (const file of Array.from(e.clipboardData.files)) {
-        if (await tryFile(file)) return;
-      }
+    if (imageFiles.length === 0 && e.clipboardData?.files) {
+      for (const f of Array.from(e.clipboardData.files)) imageFiles.push(f);
     }
+    if (imageFiles.length === 0) return;
+    e.preventDefault();
+    const mode = inputMode === "img0606" ? "0606" : "0397";
+    await processImage(imageFiles[0], mode);
   };
 
   const handleImageExtract = async (e, type) => {
