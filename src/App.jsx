@@ -736,6 +736,8 @@ function JournalTab({ techniques }) {
   const [trashTrades, setTrashTrades] = useState([]);
   const [trashLoading, setTrashLoading] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(new Set());
   const pasteZoneRef = useRef(null);
 
   useEffect(() => {
@@ -1097,6 +1099,17 @@ function JournalTab({ techniques }) {
     } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
 
+  const handleBulkSoftDelete = async () => {
+    if (selectedIds.size === 0) return;
+    const now = new Date().toISOString();
+    try {
+      await Promise.all([...selectedIds].map(id => sbPatch(id, { deleted_at: now })));
+      setTrades(p => p.filter(t => !selectedIds.has(t.id)));
+      setFeedback(`🗑️ ${selectedIds.size}개 휴지통으로 이동됨`);
+      setSelectedIds(new Set()); setSelectMode(false);
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+  };
+
   const handlePermDelete = async (id) => {
     try {
       await sbDelete("trades", id);
@@ -1120,12 +1133,19 @@ function JournalTab({ techniques }) {
         ].map(([tab, label]) => (
           <button key={tab} onClick={() => {
             setView("list"); setListTab(tab); setSelected(null); setFeedback(""); setAiAnalysis("");
+            setSelectMode(false); setSelectedIds(new Set());
             if (tab === "trash") loadTrash();
           }}
             style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: view === "list" && !selected && listTab === tab ? (tab === "trash" ? "#7f8c8d" : "#4f8ef7") : "#2a2d3a", color: view === "list" && !selected && listTab === tab ? "#fff" : "#aaa" }}>{label}</button>
         ))}
-        <button onClick={() => { setView("add"); setSelected(null); setFeedback(""); setAiAnalysis(""); }}
+        <button onClick={() => { setView("add"); setSelected(null); setFeedback(""); setAiAnalysis(""); setSelectMode(false); setSelectedIds(new Set()); }}
           style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: view === "add" ? "#4f8ef7" : "#2a2d3a", color: view === "add" ? "#fff" : "#aaa" }}>매매 추가</button>
+        {view === "list" && !selected && listTab !== "trash" && (
+          <button onClick={() => { setSelectMode(p => !p); setSelectedIds(new Set()); }}
+            style={{ padding: "4px 10px", background: selectMode ? "#e74c3c" : "#2a2d3a", border: "none", color: selectMode ? "#fff" : "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>
+            {selectMode ? "선택 취소" : "☑️ 선택"}
+          </button>
+        )}
         <button onClick={() => setGroupByDate(p => !p)}
           style={{ padding: "4px 10px", background: groupByDate ? "#4f8ef7" : "#2a2d3a", border: "none", color: groupByDate ? "#fff" : "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>📅 날짜별</button>
         <button onClick={load} style={{ marginLeft: "auto", padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>🔄</button>
@@ -1429,28 +1449,56 @@ function JournalTab({ techniques }) {
         const filtered = trades.filter(t => isWatch ? t.isWatched : !t.isWatched);
         if (filtered.length === 0) return <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>{isWatch ? "관심종목 없음" : "매매 기록 없음"}</div>;
 
-        const TradeRow = (t) => (
-          <div key={t.id} onClick={() => openDetail(t)}
-            style={{ ...box, cursor: "pointer", borderColor: isWatch ? "#3a3a2a" : "#2a2d3a" }}
-            onMouseEnter={e => e.currentTarget.style.borderColor = isWatch ? "#f39c12" : "#4f8ef7"}
-            onMouseLeave={e => e.currentTarget.style.borderColor = isWatch ? "#3a3a2a" : "#2a2d3a"}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              {isWatch && <span style={{ fontSize: 11, color: "#f39c12" }}>👀</span>}
-              <span style={{ fontWeight: 700 }}>{t.stock}</span>
-              {!groupByDate && <span style={{ fontSize: 12, color: "#666" }}>{t.date}</span>}
-              {t.technique && <span style={{ background: categoryColor(t.technique), fontSize: 11, padding: "2px 7px", borderRadius: 4, color: "#fff" }}>{t.technique}</span>}
-              {!isWatch && <span style={{ marginLeft: "auto", fontWeight: 700, color: pnlColor(parseFloat(t.pnlRate)) }}>{parseFloat(t.pnlRate) > 0 ? "+" : ""}{t.pnlRate}%</span>}
-            </div>
-            {t.reason && <div style={{ marginTop: 5, fontSize: 12, color: "#666", textAlign: "left" }}>{t.reason.slice(0, 80)}{t.reason.length > 80 ? "..." : ""}</div>}
-          </div>
-        );
+        const toggleSelect = (id) => setSelectedIds(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+        const allFiltered = filtered;
+        const allSelected = allFiltered.length > 0 && allFiltered.every(t => selectedIds.has(t.id));
 
-        if (!groupByDate) return <div style={{ display: "grid", gap: 8 }}>{filtered.map(TradeRow)}</div>;
+        const TradeRow = (t) => {
+          const checked = selectedIds.has(t.id);
+          return (
+            <div key={t.id}
+              onClick={() => selectMode ? toggleSelect(t.id) : openDetail(t)}
+              style={{ ...box, cursor: "pointer", borderColor: checked ? "#e74c3c" : isWatch ? "#3a3a2a" : "#2a2d3a", background: checked ? "#2a1a1a" : "#1a1d27" }}
+              onMouseEnter={e => { if (!checked) e.currentTarget.style.borderColor = isWatch ? "#f39c12" : "#4f8ef7"; }}
+              onMouseLeave={e => { if (!checked) e.currentTarget.style.borderColor = isWatch ? "#3a3a2a" : "#2a2d3a"; }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                {selectMode && (
+                  <input type="checkbox" checked={checked} readOnly
+                    style={{ accentColor: "#e74c3c", width: 15, height: 15, cursor: "pointer", flexShrink: 0 }} />
+                )}
+                {isWatch && <span style={{ fontSize: 11, color: "#f39c12" }}>👀</span>}
+                <span style={{ fontWeight: 700 }}>{t.stock}</span>
+                {!groupByDate && <span style={{ fontSize: 12, color: "#666" }}>{t.date}</span>}
+                {t.technique && <span style={{ background: categoryColor(t.technique), fontSize: 11, padding: "2px 7px", borderRadius: 4, color: "#fff" }}>{t.technique}</span>}
+                {!isWatch && <span style={{ marginLeft: "auto", fontWeight: 700, color: pnlColor(parseFloat(t.pnlRate)) }}>{parseFloat(t.pnlRate) > 0 ? "+" : ""}{t.pnlRate}%</span>}
+              </div>
+              {t.reason && <div style={{ marginTop: 5, fontSize: 12, color: "#666", textAlign: "left" }}>{t.reason.slice(0, 80)}{t.reason.length > 80 ? "..." : ""}</div>}
+            </div>
+          );
+        };
+
+        const SelectBar = selectMode ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "#2a1a1a", borderRadius: 8, marginBottom: 10, border: "1px solid #e74c3c" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13, color: "#aaa" }}>
+              <input type="checkbox" checked={allSelected} onChange={e => setSelectedIds(e.target.checked ? new Set(allFiltered.map(t => t.id)) : new Set())}
+                style={{ accentColor: "#e74c3c", width: 15, height: 15 }} />
+              전체선택
+            </label>
+            <span style={{ fontSize: 13, color: "#e74c3c", fontWeight: 600 }}>{selectedIds.size}개 선택됨</span>
+            <button onClick={handleBulkSoftDelete} disabled={selectedIds.size === 0}
+              style={{ padding: "5px 16px", background: selectedIds.size > 0 ? "#e74c3c" : "#3a1a1a", color: "#fff", border: "none", borderRadius: 6, cursor: selectedIds.size > 0 ? "pointer" : "default", fontSize: 13 }}>
+              🗑️ 선택 삭제
+            </button>
+          </div>
+        ) : null;
+
+        if (!groupByDate) return <div style={{ display: "grid", gap: 8 }}>{SelectBar}{filtered.map(TradeRow)}</div>;
         const grouped = filtered.reduce((acc, t) => { const d = t.date || "날짜없음"; (acc[d] = acc[d] || []).push(t); return acc; }, {});
         const sortedDates = Object.keys(grouped).sort((a, b) => b.localeCompare(a));
         const dayPnl = (ts) => ts.reduce((s, t) => s + (parseFloat(t.pnl) || 0), 0);
         return (
           <div style={{ display: "grid", gap: 4 }}>
+            {SelectBar}
             {sortedDates.map(date => (
               <div key={date}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 2px", borderBottom: "1px solid #2a2d3a", marginBottom: 6 }}>
