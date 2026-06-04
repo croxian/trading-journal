@@ -805,7 +805,7 @@ function JournalTab({ techniques }) {
   }, []);
 
   const openDetail = async (trade) => {
-    setSelected(trade); setView("detail"); setFeedback(""); setEditTrade(false);
+    setSelected(trade); setView("detail"); setFeedback(""); setEditTrade(false); setDetailAiAnalysis("");
     setDetailImgLoading(true);
     const img = await sbGetChartImg(trade.id);
     setSelected(prev => prev?.id === trade.id ? { ...prev, chartImg: img } : prev);
@@ -1627,10 +1627,21 @@ function JournalTab({ techniques }) {
         );
       })()}
 
-      {!loading && view === "detail" && selected && (
+      {!loading && view === "detail" && selected && (() => {
+        const detailFiltered = trades.filter(t => listTab === "watchlist" ? t.isWatched : !t.isWatched);
+        const detailIdx = detailFiltered.findIndex(t => t.id === selected.id);
+        return (
         <div>
-          <button onClick={() => { setView("list"); setSelected(null); setEditTrade(false); setFeedback(""); }}
-            style={{ background: "none", border: "none", color: "#4f8ef7", cursor: "pointer", fontSize: 13, marginBottom: 12 }}>← 목록</button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <button onClick={() => { setView("list"); setSelected(null); setEditTrade(false); setFeedback(""); setDetailAiAnalysis(""); }}
+              style={{ background: "none", border: "none", color: "#4f8ef7", cursor: "pointer", fontSize: 13 }}>← 목록</button>
+            <span style={{ flex: 1 }} />
+            <button onClick={() => openDetail(detailFiltered[detailIdx - 1])} disabled={detailIdx <= 0}
+              style={{ padding: "3px 10px", background: detailIdx > 0 ? "#2a2d3a" : "#1a1d27", border: "none", color: detailIdx > 0 ? "#aaa" : "#444", borderRadius: 5, cursor: detailIdx > 0 ? "pointer" : "default", fontSize: 12 }}>◀ 이전</button>
+            <span style={{ fontSize: 12, color: "#555" }}>{detailIdx + 1} / {detailFiltered.length}</span>
+            <button onClick={() => openDetail(detailFiltered[detailIdx + 1])} disabled={detailIdx >= detailFiltered.length - 1}
+              style={{ padding: "3px 10px", background: detailIdx < detailFiltered.length - 1 ? "#2a2d3a" : "#1a1d27", border: "none", color: detailIdx < detailFiltered.length - 1 ? "#aaa" : "#444", borderRadius: 5, cursor: detailIdx < detailFiltered.length - 1 ? "pointer" : "default", fontSize: 12 }}>다음 ▶</button>
+          </div>
 
           {!editTrade ? (
             <div style={box}>
@@ -1701,6 +1712,16 @@ function JournalTab({ techniques }) {
                     {detailAiLoading ? "분석 중..." : detailAiAnalysis ? "재분석" : "분석 시작"}
                   </button>
                   {detailAiAnalysis && <button onClick={() => setDetailAiAnalysis("")} style={{ padding: "3px 10px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 11 }}>초기화</button>}
+                  {detailAiAnalysis && (
+                    <button onClick={async () => {
+                      try {
+                        await sbPatch(selected.id, { ai_analysis: detailAiAnalysis });
+                        setSelected(p => ({ ...p, aiAnalysis: detailAiAnalysis }));
+                        setTrades(p => p.map(t => t.id === selected.id ? { ...t, aiAnalysis: detailAiAnalysis } : t));
+                        setFeedback("✅ AI 분석 저장됨");
+                      } catch (e) { setFeedback(`❌ ${e.message}`); }
+                    }} style={{ padding: "3px 12px", background: "#4f8ef7", color: "#fff", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 11 }}>💾 저장</button>
+                  )}
                 </div>
                 {detailAiAnalysis && <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad", whiteSpace: "pre-wrap", lineHeight: 1.7 }}>{detailAiAnalysis}</div>}
               </div>
@@ -1820,7 +1841,8 @@ function JournalTab({ techniques }) {
             </div>
           )}
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
