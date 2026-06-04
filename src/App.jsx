@@ -62,7 +62,7 @@ const pnlColor = (v) => v > 0 ? "#4caf50" : v < 0 ? "#e74c3c" : "#aaa";
 
 const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_KEY || "";
 const claude = async (system, userContent, maxTokens = 1000) => {
-  const headers = { "Content-Type": "application/json", "anthropic-dangerous-direct-browser-access": "true" };
+  const headers = { "Content-Type": "application/json", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" };
   if (ANTHROPIC_KEY) headers["x-api-key"] = ANTHROPIC_KEY;
   let res;
   try {
