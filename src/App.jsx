@@ -182,7 +182,16 @@ const parseXlsCsvToTrades = async (file) => {
   const num = s => parseFloat(String(s || 0).replace(/,/g, '')) || 0;
   let rows = [];
   if (ext === 'csv') {
-    const text = await file.text();
+    // UTF-8 시도 후 한글 헤더 없으면 EUC-KR로 재시도 (키움 기본 인코딩)
+    let text = await file.text();
+    if (!text.includes('종목')) {
+      text = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result);
+        r.onerror = rej;
+        r.readAsText(file, 'EUC-KR');
+      });
+    }
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
     const hi = lines.findIndex(l => l.includes('종목명'));
     if (hi === -1) throw new Error('CSV에서 종목명 컬럼을 찾을 수 없음');
