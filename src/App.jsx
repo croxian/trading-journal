@@ -616,6 +616,8 @@ function JournalTab({ techniques }) {
   const [pending0397, setPending0397] = useState([]);
   const [bulk0397Date, setBulk0397Date] = useState("");
   const [showStockDrop, setShowStockDrop] = useState(false);
+  const [editTrade, setEditTrade] = useState(false);
+  const [editForm, setEditForm] = useState(null);
   const pasteZoneRef = useRef(null);
 
   useEffect(() => {
@@ -735,6 +737,15 @@ function JournalTab({ techniques }) {
       setPending0397([]);
       setFeedback(`✅ ${newTrades.length}개 저장됨`);
       setView("list");
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+  };
+
+  const handleEditSave = async () => {
+    if (!editForm.stock || !editForm.buyPrice) { setFeedback("❌ 종목명과 매수가는 필수."); return; }
+    try {
+      await sbUpsert("trades", [tradeToRow(editForm)]);
+      setTrades(p => p.map(t => t.id === editForm.id ? editForm : t));
+      setSelected(editForm); setEditTrade(false); setFeedback("✅ 수정됨");
     } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
 
@@ -925,28 +936,97 @@ function JournalTab({ techniques }) {
 
       {!loading && view === "detail" && selected && (
         <div>
-          <button onClick={() => { setView("list"); setSelected(null); }} style={{ background: "none", border: "none", color: "#4f8ef7", cursor: "pointer", fontSize: 13, marginBottom: 12 }}>← 목록</button>
-          <div style={box}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-              <span style={{ fontSize: 18, fontWeight: 700 }}>{selected.stock}</span>
-              <span style={{ fontSize: 13, color: "#666" }}>{selected.date}</span>
-              {selected.technique && <span style={{ background: categoryColor(selected.technique), fontSize: 12, padding: "2px 8px", borderRadius: 4, color: "#fff" }}>{selected.technique}</span>}
-              <span style={{ marginLeft: "auto", fontSize: 18, fontWeight: 700, color: pnlColor(parseFloat(selected.pnlRate)) }}>{parseFloat(selected.pnlRate) > 0 ? "+" : ""}{selected.pnlRate}%</span>
-              <button onClick={() => handleDelete(selected.id)} style={{ padding: "4px 10px", background: "#3a1a1a", border: "none", color: "#e74c3c", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>삭제</button>
+          <button onClick={() => { setView("list"); setSelected(null); setEditTrade(false); setFeedback(""); }}
+            style={{ background: "none", border: "none", color: "#4f8ef7", cursor: "pointer", fontSize: 13, marginBottom: 12 }}>← 목록</button>
+
+          {!editTrade ? (
+            <div style={box}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                <span style={{ fontSize: 18, fontWeight: 700 }}>{selected.stock}</span>
+                <span style={{ fontSize: 13, color: "#666" }}>{selected.date}</span>
+                {selected.technique && <span style={{ background: categoryColor(selected.technique), fontSize: 12, padding: "2px 8px", borderRadius: 4, color: "#fff" }}>{selected.technique}</span>}
+                <span style={{ marginLeft: "auto", fontSize: 18, fontWeight: 700, color: pnlColor(parseFloat(selected.pnlRate)) }}>{parseFloat(selected.pnlRate) > 0 ? "+" : ""}{selected.pnlRate}%</span>
+                <button onClick={() => { setEditForm({ ...selected }); setEditTrade(true); setFeedback(""); }}
+                  style={{ padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>수정</button>
+                <button onClick={() => handleDelete(selected.id)}
+                  style={{ padding: "4px 10px", background: "#3a1a1a", border: "none", color: "#e74c3c", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>삭제</button>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 14 }}>
+                {[["매수가", selected.buyPrice], ["매도가", selected.sellPrice], ["수익률", `${selected.pnlRate}%`], ["실현손익", selected.pnl], ["매입금액", selected.amount]].map(([l, v]) => (
+                  <div key={l} style={{ background: "#13151f", borderRadius: 6, padding: "8px 10px" }}>
+                    <div style={label11}>{l}</div>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: ["수익률","실현손익"].includes(l) ? pnlColor(parseFloat(v)) : "#ddd" }}>{v || "-"}</div>
+                  </div>
+                ))}
+              </div>
+              {selected.reason && <div style={{ marginBottom: 10 }}><div style={label11}>매매 이유</div><div style={val14}>{selected.reason}</div></div>}
+              {selected.memo && <div style={{ marginBottom: 10 }}><div style={label11}>메모</div><div style={val14}>{selected.memo}</div></div>}
+              {selected.chartImg && <div style={{ marginBottom: 10 }}><div style={label11}>차트</div><img src={`data:image/jpeg;base64,${selected.chartImg}`} alt="chart" style={{ maxWidth: "100%", borderRadius: 6 }} /></div>}
+              {selected.aiAnalysis && <div><div style={label11}>🤖 AI 분석</div><div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad" }}>{selected.aiAnalysis}</div></div>}
+              {feedback && <div style={{ marginTop: 8, fontSize: 13, color: "#4caf50" }}>{feedback}</div>}
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 14 }}>
-              {[["매수가", selected.buyPrice], ["매도가", selected.sellPrice], ["수익률", `${selected.pnlRate}%`], ["실현손익", selected.pnl], ["매입금액", selected.amount]].map(([l, v]) => (
-                <div key={l} style={{ background: "#13151f", borderRadius: 6, padding: "8px 10px" }}>
-                  <div style={label11}>{l}</div>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: ["수익률","실현손익"].includes(l) ? pnlColor(parseFloat(v)) : "#ddd" }}>{v || "-"}</div>
+          ) : (
+            <div style={box}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#aaa", marginBottom: 14 }}>수정 중: {selected.stock}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+                <div style={{ position: "relative" }}>
+                  <div style={label11}>종목명 *</div>
+                  <input type="text" value={editForm.stock || ""} onChange={e => setEditForm(p => ({ ...p, stock: e.target.value }))} placeholder="종목명 *"
+                    style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box" }} />
+                </div>
+                <div>
+                  <div style={label11}>날짜</div>
+                  <input type="date" value={editForm.date || ""} onChange={e => setEditForm(p => ({ ...p, date: e.target.value }))}
+                    style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box", colorScheme: "dark" }} />
+                </div>
+                {[["buyPrice","매수가 *","number"],["sellPrice","매도가","number"],["amount","매입금액","number"],["pnl","실현손익","number"],["pnlRate","수익률 (%)","number"]].map(([f,p,t]) => (
+                  <div key={f}>
+                    <div style={label11}>{p}</div>
+                    <input type={t} value={editForm[f] ?? ""} onChange={e => setEditForm(prev => ({ ...prev, [f]: e.target.value }))} placeholder={p}
+                      style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box" }} />
+                  </div>
+                ))}
+                <div>
+                  <div style={label11}>매매 카테고리</div>
+                  <select value={TRADE_CATEGORIES.includes(editForm.technique) ? editForm.technique : (editForm.technique ? "기타" : "")}
+                    onChange={e => { const v = e.target.value; setEditForm(p => ({ ...p, technique: v !== "기타" ? v : "기타" })); }}
+                    style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13 }}>
+                    <option value="">선택 안함</option>
+                    {TRADE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  {(!TRADE_CATEGORIES.slice(0, -1).includes(editForm.technique) && editForm.technique !== "") && (
+                    <input value={editForm.technique === "기타" ? "" : editForm.technique}
+                      onChange={e => setEditForm(p => ({ ...p, technique: e.target.value || "기타" }))}
+                      placeholder="카테고리 직접 입력..."
+                      style={{ width: "100%", marginTop: 6, background: "#13151f", border: "1px solid #4f8ef7", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box" }} />
+                  )}
+                </div>
+              </div>
+              {[["reason","매매 이유","왜 이 자리에서 매수/매도했는지..."],["memo","메모","추가 메모..."]].map(([f,lbl,ph]) => (
+                <div key={f} style={{ marginBottom: 10 }}>
+                  <div style={label11}>{lbl}</div>
+                  <textarea value={editForm[f] || ""} onChange={e => setEditForm(p => ({ ...p, [f]: e.target.value }))} placeholder={ph}
+                    style={{ width: "100%", minHeight: f === "reason" ? 80 : 60, background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: 10, fontSize: 13, resize: "vertical", boxSizing: "border-box" }} />
                 </div>
               ))}
+              {editForm.chartImg && (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                    <div style={label11}>차트 이미지</div>
+                    <button onClick={() => setEditForm(p => ({ ...p, chartImg: null }))}
+                      style={{ background: "none", border: "none", color: "#e74c3c", cursor: "pointer", fontSize: 12 }}>제거</button>
+                  </div>
+                  <img src={`data:image/jpeg;base64,${editForm.chartImg}`} alt="chart" style={{ maxWidth: "100%", borderRadius: 6, border: "1px solid #2a2d3a" }} />
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <button onClick={handleEditSave} style={{ padding: "8px 20px", background: "#4f8ef7", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>저장</button>
+                <button onClick={() => { setEditTrade(false); setFeedback(""); }}
+                  style={{ padding: "8px 14px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>취소</button>
+                {feedback && <span style={{ fontSize: 13, color: feedback.startsWith("✅") ? "#4caf50" : "#e74c3c" }}>{feedback}</span>}
+              </div>
             </div>
-            {selected.reason && <div style={{ marginBottom: 10 }}><div style={label11}>매매 이유</div><div style={val14}>{selected.reason}</div></div>}
-            {selected.memo && <div style={{ marginBottom: 10 }}><div style={label11}>메모</div><div style={val14}>{selected.memo}</div></div>}
-            {selected.chartImg && <div style={{ marginBottom: 10 }}><div style={label11}>차트</div><img src={`data:image/png;base64,${selected.chartImg}`} alt="chart" style={{ maxWidth: "100%", borderRadius: 6 }} /></div>}
-            {selected.aiAnalysis && <div><div style={label11}>🤖 AI 분석</div><div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad" }}>{selected.aiAnalysis}</div></div>}
-          </div>
+          )}
         </div>
       )}
     </div>
