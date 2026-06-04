@@ -109,6 +109,47 @@ const compressImage = (file, maxPx = 2048) => new Promise((resolve, reject) => {
   reader.readAsDataURL(file);
 });
 
+const b64ToFile = (b64, mime) => {
+  const bytes = atob(b64); const arr = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+  return new File([new Blob([arr], { type: mime })], "img", { type: mime });
+};
+
+const parsePptxToSlides = async (file) => {
+  const { default: JSZip } = await import("jszip");
+  const zip = await JSZip.loadAsync(await file.arrayBuffer());
+  const ALLOWED_EXT = ["png","jpg","jpeg","gif","bmp","webp"];
+
+  const slideKeys = Object.keys(zip.files)
+    .filter(k => /^ppt\/slides\/slide\d+\.xml$/.test(k))
+    .sort((a, b) => +a.match(/\d+/)[0] - +b.match(/\d+/)[0]);
+
+  return Promise.all(slideKeys.map(async key => {
+    const xml = await zip.files[key].async("text");
+    const texts = [...xml.matchAll(/<a:t>([^<]*)<\/a:t>/g)]
+      .map(m => m[1]).filter(t => t.trim()).join("\n");
+
+    const relsKey = key.replace("slides/slide", "slides/_rels/slide").replace(".xml", ".xml.rels");
+    const images = [];
+    if (zip.files[relsKey]) {
+      const relsXml = await zip.files[relsKey].async("text");
+      for (const rel of [...relsXml.matchAll(/<Relationship[^>]+>/g)]) {
+        if (!/\/image"/.test(rel[0])) continue;
+        const t = rel[0].match(/Target="\.\.\/media\/([^"]+)"/);
+        if (!t) continue;
+        const ext = t[1].split(".").pop().toLowerCase();
+        if (!ALLOWED_EXT.includes(ext)) continue;
+        const mKey = `ppt/media/${t[1]}`;
+        if (!zip.files[mKey]) continue;
+        const b64 = await zip.files[mKey].async("base64");
+        const mime = ["jpg","jpeg"].includes(ext) ? "image/jpeg" : `image/${ext}`;
+        images.push({ b64, mime });
+      }
+    }
+    return { texts, images };
+  }));
+};
+
 const box = { background: "#1a1d27", borderRadius: 10, border: "1px solid #2a2d3a", padding: "14px 16px" };
 const label11 = { fontSize: 11, color: "#555", marginBottom: 3, textAlign: "left" };
 const val14 = { fontSize: 14, color: "#ddd", background: "#13151f", padding: "8px 10px", borderRadius: 6, whiteSpace: "pre-wrap", lineHeight: 1.6, textAlign: "left" };
@@ -620,6 +661,9 @@ function JournalTab({ techniques }) {
   const [editForm, setEditForm] = useState(null);
   const [editImgLoading, setEditImgLoading] = useState(false);
   const [sel0397, setSel0397] = useState(new Set());
+  const [pendingPpt, setPendingPpt] = useState([]);
+  const [pptLoading, setPptLoading] = useState(false);
+  const [pptProgress, setPptProgress] = useState("");
   const pasteZoneRef = useRef(null);
 
   useEffect(() => {
@@ -742,6 +786,56 @@ function JournalTab({ techniques }) {
     } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
 
+  const processPptFile = async (file) => {
+    setPptLoading(true); setPptProgress(""); setFeedback("");
+    try {
+      const slides = await parsePptxToSlides(file);
+      const results = [];
+      for (let i = 0; i < slides.length; i++) {
+        setPptProgress(`⏳ ${i + 1} / ${slides.length} 슬라이드 처리 중...`);
+        const { texts, images } = slides[i];
+        if (!texts && images.length === 0) continue;
+        // Compress images
+        const compressed = [];
+        for (const img of images) {
+          try { compressed.push(await compressImage(b64ToFile(img.b64, img.mime))); }
+          catch { /* 렌더링 불가 이미지 무시 */ }
+        }
+        const content = [
+          ...compressed.map(b64 => ({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } })),
+          { type: "text", text: `슬라이드 텍스트:\n${texts || "(없음)"}\n\n이미지 중 키움증권 주식 차트(분봉/일봉)를 찾아 JSON 추출:\n{"chart_index":이미지번호(0부터,없으면null),"stock":"종목명","date":"YYYY-MM-DD","reason":"매매이유(불릿 포함 그대로)"}` }
+        ];
+        try {
+          const raw = await claude("JSON만 출력.", content, 1500);
+          const p = await parseJSON(raw);
+          results.push({
+            stock: p.stock || "", date: p.date || new Date().toISOString().slice(0, 10),
+            reason: p.reason || "",
+            chartImg: (p.chart_index != null && compressed[p.chart_index]) ? compressed[p.chart_index] : null,
+            buyPrice: "", sellPrice: "", amount: "", pnl: "", pnlRate: "", technique: "", memo: "",
+          });
+        } catch { /* 슬라이드 파싱 실패 시 스킵 */ }
+      }
+      if (results.length > 0) { setPendingPpt(results); setFeedback(`✅ ${results.length}개 슬라이드 추출 완료`); }
+      else setFeedback("❌ 추출된 슬라이드 없음");
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+    setPptLoading(false); setPptProgress("");
+  };
+
+  const handleBulkSavePpt = async () => {
+    if (pendingPpt.length === 0) return;
+    setFeedback("");
+    const base = Date.now();
+    try {
+      const newTrades = pendingPpt.map((t, i) => ({
+        ...t, id: base + i, createdAt: new Date().toLocaleDateString("ko-KR"), aiAnalysis: "", chartDesc: "",
+      }));
+      await sbUpsert("trades", newTrades.map(tradeToRow));
+      setTrades(p => [...[...newTrades].reverse(), ...p]);
+      setPendingPpt([]); setFeedback(`✅ ${newTrades.length}개 저장됨`); setView("list");
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+  };
+
   const handleEditImageExtract = async (file) => {
     setEditImgLoading(true); setFeedback("");
     try {
@@ -824,8 +918,8 @@ function JournalTab({ techniques }) {
       {!loading && view === "add" && (
         <div>
           <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-            {[["img0606","📈 [0606]"], ["img0397","📋 [0397]"], ["manual","✏️ 직접입력"]].map(([m, label]) => (
-              <button key={m} onClick={() => { setInputMode(m); setPending0397([]); setFeedback(""); }}
+            {[["img0606","📈 [0606]"], ["img0397","📋 [0397]"], ["ppt","📊 PPT"], ["manual","✏️ 직접입력"]].map(([m, label]) => (
+              <button key={m} onClick={() => { setInputMode(m); setPending0397([]); setPendingPpt([]); setFeedback(""); }}
                 style={{ padding: "6px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, background: inputMode === m ? "#4f8ef7" : "#2a2d3a", color: inputMode === m ? "#fff" : "#aaa" }}>{label}</button>
             ))}
           </div>
@@ -849,7 +943,65 @@ function JournalTab({ techniques }) {
             </div>
           )}
 
-          {inputMode === "img0397" ? (
+          {inputMode === "ppt" ? (
+            <div>
+              {pendingPpt.length === 0 ? (
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 20px", background: "#2a2d3a", border: "1px dashed #4f8ef7", borderRadius: 8, cursor: "pointer", fontSize: 13, color: "#aaa" }}>
+                    📊 .pptx 파일 업로드
+                    <input type="file" accept=".pptx" style={{ display: "none" }} onChange={e => { const f = e.target.files[0]; if (f) { processPptFile(f); e.target.value = ""; } }} />
+                  </label>
+                  {pptLoading && <div style={{ marginTop: 10, fontSize: 13, color: "#aaa" }}>{pptProgress}</div>}
+                  {!pptLoading && feedback && <div style={{ marginTop: 8, fontSize: 13, color: feedback.startsWith("✅") ? "#4caf50" : "#e74c3c" }}>{feedback}</div>}
+                </div>
+              ) : (
+                <div>
+                  <div style={{ fontSize: 13, color: "#aaa", marginBottom: 12 }}>{feedback}</div>
+                  <div style={{ display: "grid", gap: 12, marginBottom: 14 }}>
+                    {pendingPpt.map((t, i) => (
+                      <div key={i} style={{ ...box, position: "relative" }}>
+                        <button onClick={() => setPendingPpt(p => p.filter((_, j) => j !== i))}
+                          style={{ position: "absolute", top: 10, right: 10, background: "none", border: "none", color: "#e74c3c", cursor: "pointer", fontSize: 14 }}>✕</button>
+                        <div style={{ display: "grid", gridTemplateColumns: t.chartImg ? "120px 1fr" : "1fr", gap: 12, marginBottom: 10 }}>
+                          {t.chartImg && <img src={`data:image/jpeg;base64,${t.chartImg}`} alt="chart" style={{ width: "100%", borderRadius: 6, border: "1px solid #2a2d3a" }} />}
+                          <div>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                              <div>
+                                <div style={label11}>종목명 *</div>
+                                <input value={t.stock} onChange={e => setPendingPpt(p => p.map((r,j) => j===i ? {...r, stock: e.target.value} : r))}
+                                  style={{ width:"100%", background:"#13151f", border:"1px solid #2a2d3a", borderRadius:6, color:"#e0e0e0", padding:"6px 8px", fontSize:12, boxSizing:"border-box" }} />
+                              </div>
+                              <div>
+                                <div style={label11}>날짜</div>
+                                <input type="date" value={t.date} onChange={e => setPendingPpt(p => p.map((r,j) => j===i ? {...r, date: e.target.value} : r))}
+                                  style={{ width:"100%", background:"#13151f", border:"1px solid #2a2d3a", borderRadius:6, color:"#e0e0e0", padding:"6px 8px", fontSize:12, boxSizing:"border-box", colorScheme:"dark" }} />
+                              </div>
+                            </div>
+                            <div style={label11}>매매 이유</div>
+                            <textarea value={t.reason} onChange={e => setPendingPpt(p => p.map((r,j) => j===i ? {...r, reason: e.target.value} : r))}
+                              style={{ width:"100%", minHeight:60, background:"#13151f", border:"1px solid #2a2d3a", borderRadius:6, color:"#e0e0e0", padding:8, fontSize:12, resize:"vertical", boxSizing:"border-box" }} />
+                          </div>
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 6 }}>
+                          {[["buyPrice","매수가"],["sellPrice","매도가"],["pnlRate","수익률(%)"],["pnl","실현손익"],["amount","매입금액"]].map(([f,lbl]) => (
+                            <div key={f}>
+                              <div style={label11}>{lbl}</div>
+                              <input type="number" value={t[f]} onChange={e => setPendingPpt(p => p.map((r,j) => j===i ? {...r, [f]: e.target.value} : r))}
+                                placeholder="-" style={{ width:"100%", background:"#13151f", border:"1px solid #2a2d3a", borderRadius:6, color:"#e0e0e0", padding:"6px 8px", fontSize:12, boxSizing:"border-box" }} />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                    <button onClick={handleBulkSavePpt} style={{ padding: "8px 20px", background: "#4f8ef7", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>전체 저장</button>
+                    <button onClick={() => { setPendingPpt([]); setFeedback(""); }} style={{ padding: "8px 14px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>취소</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : inputMode === "img0397" ? (
             pending0397.length > 0 ? (
               <div style={{ ...box, marginBottom: 14 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>추출된 매매 ({pending0397.length}건)</div>
