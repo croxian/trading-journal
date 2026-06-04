@@ -14,11 +14,25 @@ const sbGet = async (table) => {
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 };
-const TRADE_LIST_FIELDS = "id,stock,date,buy_price,sell_price,amount,pnl,pnl_rate,reason,technique,memo,ai_analysis,chart_desc,created_at,is_watched";
+const TRADE_LIST_FIELDS = "id,stock,date,buy_price,sell_price,amount,pnl,pnl_rate,reason,technique,memo,ai_analysis,chart_desc,created_at,is_watched,deleted_at";
 const sbGetTrades = async () => {
-  const r = await fetch(`${SB_URL}/rest/v1/trades?select=${TRADE_LIST_FIELDS}&order=id.asc`, { headers: HDR });
+  const r = await fetch(`${SB_URL}/rest/v1/trades?select=${TRADE_LIST_FIELDS}&deleted_at=is.null&order=id.asc`, { headers: HDR });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
+};
+const sbGetTrash = async () => {
+  const r = await fetch(`${SB_URL}/rest/v1/trades?select=${TRADE_LIST_FIELDS}&deleted_at=not.is.null&order=deleted_at.desc`, { headers: HDR });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+};
+const sbPatch = async (id, data) => {
+  const HDR2 = { ...HDR, Prefer: "return=minimal" };
+  const r = await fetch(`${SB_URL}/rest/v1/trades?id=eq.${id}`, { method: "PATCH", headers: HDR2, body: JSON.stringify(data) });
+  if (!r.ok) throw new Error(await r.text());
+};
+const sbDeleteOld = async (before) => {
+  const r = await fetch(`${SB_URL}/rest/v1/trades?deleted_at=lt.${before}`, { method: "DELETE", headers: HDR });
+  if (!r.ok) throw new Error(await r.text());
 };
 const sbGetChartImg = async (id) => {
   const r = await fetch(`${SB_URL}/rest/v1/trades?id=eq.${id}&select=chart_img`, { headers: HDR });
@@ -38,7 +52,7 @@ const sbDelete = async (table, id) => {
 const techToRow = (t) => ({ id: t.id, name: t.name, category: t.category, timeframe: t.timeframe, entry: t.entry, exit: t.exit, pattern: t.pattern, tags: t.tags, notes: t.notes, raw_input: t.rawInput, created_at: t.createdAt });
 const rowToTech = (r) => ({ id: r.id, name: r.name, category: r.category, timeframe: r.timeframe, entry: r.entry, exit: r.exit, pattern: r.pattern, tags: r.tags, notes: r.notes, rawInput: r.raw_input, createdAt: r.created_at });
 const tradeToRow = (t) => ({ id: t.id, stock: t.stock, date: t.date, buy_price: t.buyPrice, sell_price: t.sellPrice, amount: t.amount, pnl: t.pnl, pnl_rate: t.pnlRate, reason: t.reason, technique: t.technique, memo: t.memo, chart_img: t.chartImg, ai_analysis: t.aiAnalysis, chart_desc: t.chartDesc, created_at: t.createdAt, is_watched: t.isWatched === true });
-const rowToTrade = (r) => ({ id: r.id, stock: r.stock, date: r.date, buyPrice: r.buy_price, sellPrice: r.sell_price, amount: r.amount, pnl: r.pnl, pnlRate: r.pnl_rate, reason: r.reason, technique: r.technique, memo: r.memo, chartImg: r.chart_img, aiAnalysis: r.ai_analysis, chartDesc: r.chart_desc, createdAt: r.created_at, isWatched: r.is_watched === true });
+const rowToTrade = (r) => ({ id: r.id, stock: r.stock, date: r.date, buyPrice: r.buy_price, sellPrice: r.sell_price, amount: r.amount, pnl: r.pnl, pnlRate: r.pnl_rate, reason: r.reason, technique: r.technique, memo: r.memo, chartImg: r.chart_img, aiAnalysis: r.ai_analysis, chartDesc: r.chart_desc, createdAt: r.created_at, isWatched: r.is_watched === true, deletedAt: r.deleted_at || null });
 
 // ==================== 매매 카테고리 ====================
 const TRADE_CATEGORIES = [
@@ -719,6 +733,9 @@ function JournalTab({ techniques }) {
   const [detailAiAnalysis, setDetailAiAnalysis] = useState("");
   const [detailAiLoading, setDetailAiLoading] = useState(false);
   const [listTab, setListTab] = useState("trades");
+  const [trashTrades, setTrashTrades] = useState([]);
+  const [trashLoading, setTrashLoading] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState(null);
   const pasteZoneRef = useRef(null);
 
   useEffect(() => {
@@ -1051,9 +1068,41 @@ function JournalTab({ techniques }) {
     } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
 
-  const handleDelete = async (id) => {
-    try { await sbDelete("trades", id); setTrades(p => p.filter(t => t.id !== id)); setSelected(null); setView("list"); }
-    catch (e) { setFeedback(`❌ ${e.message}`); }
+  const handleSoftDelete = async (id) => {
+    try {
+      await sbPatch(id, { deleted_at: new Date().toISOString() });
+      setTrades(p => p.filter(t => t.id !== id));
+      setSelected(null); setDeleteConfirmId(null); setView("list"); setFeedback("🗑️ 휴지통으로 이동됨");
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+  };
+
+  const loadTrash = async () => {
+    setTrashLoading(true);
+    try {
+      // 10일 지난 항목 자동 영구삭제
+      const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+      await sbDeleteOld(tenDaysAgo).catch(() => {});
+      const rows = await sbGetTrash();
+      setTrashTrades(rows.map(rowToTrade));
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+    setTrashLoading(false);
+  };
+
+  const handleRestore = async (id) => {
+    try {
+      await sbPatch(id, { deleted_at: null });
+      setTrashTrades(p => p.filter(t => t.id !== id));
+      await load();
+      setFeedback("✅ 복원됨");
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+  };
+
+  const handlePermDelete = async (id) => {
+    try {
+      await sbDelete("trades", id);
+      setTrashTrades(p => p.filter(t => t.id !== id));
+      setFeedback("✅ 영구 삭제됨");
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
 
   const inp = (field, placeholder, type = "text") => (
@@ -1067,9 +1116,13 @@ function JournalTab({ techniques }) {
         {[
           ["trades", `📋 매매 (${trades.filter(t => !t.isWatched).length})`],
           ["watchlist", `👀 관심종목 (${trades.filter(t => t.isWatched).length})`],
+          ["trash", `🗑️ 휴지통${trashTrades.length > 0 ? ` (${trashTrades.length})` : ""}`],
         ].map(([tab, label]) => (
-          <button key={tab} onClick={() => { setView("list"); setListTab(tab); setSelected(null); setFeedback(""); setAiAnalysis(""); }}
-            style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: view === "list" && !selected && listTab === tab ? "#4f8ef7" : "#2a2d3a", color: view === "list" && !selected && listTab === tab ? "#fff" : "#aaa" }}>{label}</button>
+          <button key={tab} onClick={() => {
+            setView("list"); setListTab(tab); setSelected(null); setFeedback(""); setAiAnalysis("");
+            if (tab === "trash") loadTrash();
+          }}
+            style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: view === "list" && !selected && listTab === tab ? (tab === "trash" ? "#7f8c8d" : "#4f8ef7") : "#2a2d3a", color: view === "list" && !selected && listTab === tab ? "#fff" : "#aaa" }}>{label}</button>
         ))}
         <button onClick={() => { setView("add"); setSelected(null); setFeedback(""); setAiAnalysis(""); }}
           style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: view === "add" ? "#4f8ef7" : "#2a2d3a", color: view === "add" ? "#fff" : "#aaa" }}>매매 추가</button>
@@ -1342,7 +1395,36 @@ function JournalTab({ techniques }) {
         </div>
       )}
 
-      {!loading && view === "list" && !selected && (() => {
+      {!loading && view === "list" && !selected && listTab === "trash" && (
+        trashLoading
+          ? <div style={{ color: "#555", padding: 40, textAlign: "center" }}>로딩 중...</div>
+          : trashTrades.length === 0
+            ? <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>휴지통이 비어 있습니다</div>
+            : <div style={{ display: "grid", gap: 8 }}>
+                <div style={{ fontSize: 12, color: "#555", padding: "4px 2px" }}>10일 후 자동 영구삭제됩니다</div>
+                {trashTrades.map(t => {
+                  const days = Math.max(0, 10 - Math.floor((Date.now() - new Date(t.deletedAt)) / 86400000));
+                  return (
+                    <div key={t.id} style={{ ...box, borderColor: "#3a2a2a" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ fontWeight: 700, color: "#aaa" }}>{t.stock}</span>
+                        <span style={{ fontSize: 12, color: "#555" }}>{t.date}</span>
+                        <span style={{ fontSize: 11, color: days <= 2 ? "#e74c3c" : "#555", marginLeft: "auto" }}>
+                          {days === 0 ? "오늘 삭제됨" : `${days}일 후 영구삭제`}
+                        </span>
+                        <button onClick={() => handleRestore(t.id)}
+                          style={{ padding: "3px 10px", background: "#27ae60", color: "#fff", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>복원</button>
+                        <button onClick={() => handlePermDelete(t.id)}
+                          style={{ padding: "3px 10px", background: "#3a1a1a", color: "#e74c3c", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>영구삭제</button>
+                      </div>
+                      {t.reason && <div style={{ marginTop: 5, fontSize: 12, color: "#555" }}>{t.reason.slice(0, 60)}...</div>}
+                    </div>
+                  );
+                })}
+              </div>
+      )}
+
+      {!loading && view === "list" && !selected && listTab !== "trash" && (() => {
         const isWatch = listTab === "watchlist";
         const filtered = trades.filter(t => isWatch ? t.isWatched : !t.isWatched);
         if (filtered.length === 0) return <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>{isWatch ? "관심종목 없음" : "매매 기록 없음"}</div>;
@@ -1392,24 +1474,42 @@ function JournalTab({ techniques }) {
 
           {!editTrade ? (
             <div style={box}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
                 <span style={{ fontSize: 18, fontWeight: 700 }}>{selected.stock}</span>
                 <span style={{ fontSize: 13, color: "#666" }}>{selected.date}</span>
                 {selected.isWatched && <span style={{ background: "#7a6000", fontSize: 12, padding: "2px 8px", borderRadius: 4, color: "#f39c12" }}>👀 관심종목</span>}
                 {selected.technique && <span style={{ background: categoryColor(selected.technique), fontSize: 12, padding: "2px 8px", borderRadius: 4, color: "#fff" }}>{selected.technique}</span>}
                 {!selected.isWatched && <span style={{ marginLeft: "auto", fontSize: 18, fontWeight: 700, color: pnlColor(parseFloat(selected.pnlRate)) }}>{parseFloat(selected.pnlRate) > 0 ? "+" : ""}{selected.pnlRate}%</span>}
-                {selected.isWatched && (
+                {selected.isWatched && <span style={{ marginLeft: "auto" }} />}
+                {selected.isWatched ? (
                   <button onClick={async () => {
                     const updated = { ...selected, isWatched: false };
                     await sbUpsert("trades", [tradeToRow(updated)]);
                     setTrades(p => p.map(t => t.id === selected.id ? updated : t));
                     setSelected(updated); setListTab("trades"); setFeedback("✅ 매매로 전환됨");
-                  }} style={{ marginLeft: "auto", padding: "4px 10px", background: "#27ae60", border: "none", color: "#fff", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>매매로 전환</button>
+                  }} style={{ padding: "4px 10px", background: "#27ae60", border: "none", color: "#fff", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>매매로 전환</button>
+                ) : (
+                  <button onClick={async () => {
+                    const updated = { ...selected, isWatched: true };
+                    await sbUpsert("trades", [tradeToRow(updated)]);
+                    setTrades(p => p.map(t => t.id === selected.id ? updated : t));
+                    setSelected(updated); setListTab("watchlist"); setFeedback("✅ 관심종목으로 이동됨");
+                  }} style={{ padding: "4px 10px", background: "#7a6000", border: "none", color: "#f39c12", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>관심종목으로</button>
                 )}
-                <button onClick={() => { setEditForm({ ...selected }); setEditTrade(true); setFeedback(""); }}
+                <button onClick={() => { setEditForm({ ...selected }); setEditTrade(true); setFeedback(""); setDeleteConfirmId(null); }}
                   style={{ padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>수정</button>
-                <button onClick={() => handleDelete(selected.id)}
-                  style={{ padding: "4px 10px", background: "#3a1a1a", border: "none", color: "#e74c3c", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>삭제</button>
+                {deleteConfirmId === selected.id ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontSize: 12, color: "#e74c3c" }}>삭제하시겠습니까?</span>
+                    <button onClick={() => handleSoftDelete(selected.id)}
+                      style={{ padding: "4px 10px", background: "#e74c3c", color: "#fff", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>확인</button>
+                    <button onClick={() => setDeleteConfirmId(null)}
+                      style={{ padding: "4px 10px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>취소</button>
+                  </div>
+                ) : (
+                  <button onClick={() => setDeleteConfirmId(selected.id)}
+                    style={{ padding: "4px 10px", background: "#3a1a1a", border: "none", color: "#e74c3c", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>🗑️ 삭제</button>
+                )}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 14 }}>
                 {[["매수가", selected.buyPrice], ["매도가", selected.sellPrice], ["수익률", `${selected.pnlRate}%`], ["실현손익", selected.pnl], ["매입금액", selected.amount]].map(([l, v]) => (
