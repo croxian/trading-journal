@@ -271,8 +271,8 @@ function DashboardTab({ onNavigate }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([sbGet("trades"), sbGet("techniques")])
-      .then(([tr, te]) => { setTrades(tr.map(rowToTrade)); setTechniques(te.map(rowToTech)); })
+    Promise.all([sbGetTrades(), sbGet("techniques")])
+      .then(([tr, te]) => { setTrades(tr.map(rowToTrade).filter(t => !t.deletedAt)); setTechniques(te.map(rowToTech)); })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
@@ -787,6 +787,8 @@ function JournalTab({ techniques }) {
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
+  const [trashSelectMode, setTrashSelectMode] = useState(false);
+  const [trashSelectedIds, setTrashSelectedIds] = useState(new Set());
   const pasteZoneRef = useRef(null);
 
   useEffect(() => {
@@ -1169,6 +1171,36 @@ function JournalTab({ techniques }) {
     } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
 
+  const handleBulkTrashRestore = async () => {
+    if (trashSelectedIds.size === 0) return;
+    try {
+      await Promise.all([...trashSelectedIds].map(id => sbPatch(id, { deleted_at: null })));
+      setTrashTrades(p => p.filter(t => !trashSelectedIds.has(t.id)));
+      await load();
+      setFeedback(`✅ ${trashSelectedIds.size}개 복원됨`);
+      setTrashSelectedIds(new Set()); setTrashSelectMode(false);
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+  };
+
+  const handleBulkPermDelete = async () => {
+    if (trashSelectedIds.size === 0) return;
+    try {
+      await Promise.all([...trashSelectedIds].map(id => sbDelete("trades", id)));
+      setTrashTrades(p => p.filter(t => !trashSelectedIds.has(t.id)));
+      setFeedback(`✅ ${trashSelectedIds.size}개 영구삭제됨`);
+      setTrashSelectedIds(new Set()); setTrashSelectMode(false);
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+  };
+
+  const handleDuplicate = async () => {
+    const dup = { ...selected, id: Date.now(), createdAt: new Date().toLocaleDateString("ko-KR"), chartImg: null, aiAnalysis: "", deletedAt: null };
+    try {
+      await sbUpsert("trades", [tradeToRow(dup)]);
+      setTrades(p => [dup, ...p]);
+      setFeedback("✅ 복제됨"); setView("list"); setSelected(null);
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+  };
+
   const inp = (field, placeholder, type = "text") => (
     <input type={type} value={form[field] || ""} onChange={e => setForm(p => ({ ...p, [field]: e.target.value }))} placeholder={placeholder}
       style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box", textAlign: "left" }} />
@@ -1185,16 +1217,20 @@ function JournalTab({ techniques }) {
           <button key={tab} onClick={() => {
             setView("list"); setListTab(tab); setSelected(null); setFeedback(""); setAiAnalysis("");
             setSelectMode(false); setSelectedIds(new Set());
+            setTrashSelectMode(false); setTrashSelectedIds(new Set());
             if (tab === "trash") loadTrash();
           }}
             style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: view === "list" && !selected && listTab === tab ? (tab === "trash" ? "#7f8c8d" : "#4f8ef7") : "#2a2d3a", color: view === "list" && !selected && listTab === tab ? "#fff" : "#aaa" }}>{label}</button>
         ))}
         <button onClick={() => { setView("add"); setSelected(null); setFeedback(""); setAiAnalysis(""); setSelectMode(false); setSelectedIds(new Set()); }}
           style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: view === "add" ? "#4f8ef7" : "#2a2d3a", color: view === "add" ? "#fff" : "#aaa" }}>매매 추가</button>
-        {view === "list" && !selected && listTab !== "trash" && (
-          <button onClick={() => { setSelectMode(p => !p); setSelectedIds(new Set()); }}
-            style={{ padding: "4px 10px", background: selectMode ? "#e74c3c" : "#2a2d3a", border: "none", color: selectMode ? "#fff" : "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>
-            {selectMode ? "선택 취소" : "☑️ 선택"}
+        {view === "list" && !selected && (
+          <button onClick={() => {
+            if (listTab === "trash") { setTrashSelectMode(p => !p); setTrashSelectedIds(new Set()); }
+            else { setSelectMode(p => !p); setSelectedIds(new Set()); }
+          }}
+            style={{ padding: "4px 10px", background: (listTab === "trash" ? trashSelectMode : selectMode) ? "#e74c3c" : "#2a2d3a", border: "none", color: (listTab === "trash" ? trashSelectMode : selectMode) ? "#fff" : "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>
+            {(listTab === "trash" ? trashSelectMode : selectMode) ? "선택 취소" : "☑️ 선택"}
           </button>
         )}
         <button onClick={() => setGroupByDate(p => !p)}
@@ -1473,20 +1509,45 @@ function JournalTab({ techniques }) {
             ? <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>휴지통이 비어 있습니다</div>
             : <div style={{ display: "grid", gap: 8 }}>
                 <div style={{ fontSize: 12, color: "#555", padding: "4px 2px" }}>10일 후 자동 영구삭제됩니다</div>
+                {trashSelectMode && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "#2a1a1a", borderRadius: 8, border: "1px solid #e74c3c" }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13, color: "#aaa" }}>
+                      <input type="checkbox"
+                        checked={trashTrades.length > 0 && trashTrades.every(t => trashSelectedIds.has(t.id))}
+                        onChange={e => setTrashSelectedIds(e.target.checked ? new Set(trashTrades.map(t => t.id)) : new Set())}
+                        style={{ accentColor: "#e74c3c", width: 15, height: 15 }} />
+                      전체선택
+                    </label>
+                    <span style={{ fontSize: 13, color: "#e74c3c", fontWeight: 600 }}>{trashSelectedIds.size}개 선택됨</span>
+                    <button onClick={handleBulkTrashRestore} disabled={trashSelectedIds.size === 0}
+                      style={{ padding: "5px 14px", background: trashSelectedIds.size > 0 ? "#27ae60" : "#1a2a1a", color: "#fff", border: "none", borderRadius: 6, cursor: trashSelectedIds.size > 0 ? "pointer" : "default", fontSize: 13 }}>복원</button>
+                    <button onClick={handleBulkPermDelete} disabled={trashSelectedIds.size === 0}
+                      style={{ padding: "5px 14px", background: trashSelectedIds.size > 0 ? "#e74c3c" : "#3a1a1a", color: "#fff", border: "none", borderRadius: 6, cursor: trashSelectedIds.size > 0 ? "pointer" : "default", fontSize: 13 }}>영구삭제</button>
+                  </div>
+                )}
                 {trashTrades.map(t => {
                   const days = Math.max(0, 10 - Math.floor((Date.now() - new Date(t.deletedAt)) / 86400000));
+                  const checked = trashSelectedIds.has(t.id);
                   return (
-                    <div key={t.id} style={{ ...box, borderColor: "#3a2a2a" }}>
+                    <div key={t.id}
+                      onClick={() => trashSelectMode && setTrashSelectedIds(p => { const n = new Set(p); n.has(t.id) ? n.delete(t.id) : n.add(t.id); return n; })}
+                      style={{ ...box, borderColor: checked ? "#e74c3c" : "#3a2a2a", background: checked ? "#2a1a1a" : "#1a1d27", cursor: trashSelectMode ? "pointer" : "default" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        {trashSelectMode && (
+                          <input type="checkbox" checked={checked} readOnly
+                            style={{ accentColor: "#e74c3c", width: 15, height: 15, cursor: "pointer", flexShrink: 0 }} />
+                        )}
                         <span style={{ fontWeight: 700, color: "#aaa" }}>{t.stock}</span>
                         <span style={{ fontSize: 12, color: "#555" }}>{t.date}</span>
                         <span style={{ fontSize: 11, color: days <= 2 ? "#e74c3c" : "#555", marginLeft: "auto" }}>
                           {days === 0 ? "오늘 삭제됨" : `${days}일 후 영구삭제`}
                         </span>
-                        <button onClick={() => handleRestore(t.id)}
-                          style={{ padding: "3px 10px", background: "#27ae60", color: "#fff", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>복원</button>
-                        <button onClick={() => handlePermDelete(t.id)}
-                          style={{ padding: "3px 10px", background: "#3a1a1a", color: "#e74c3c", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>영구삭제</button>
+                        {!trashSelectMode && <>
+                          <button onClick={() => handleRestore(t.id)}
+                            style={{ padding: "3px 10px", background: "#27ae60", color: "#fff", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>복원</button>
+                          <button onClick={() => handlePermDelete(t.id)}
+                            style={{ padding: "3px 10px", background: "#3a1a1a", color: "#e74c3c", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>영구삭제</button>
+                        </>}
                       </div>
                       {t.reason && <div style={{ marginTop: 5, fontSize: 12, color: "#555" }}>{t.reason.slice(0, 60)}...</div>}
                     </div>
@@ -1597,6 +1658,8 @@ function JournalTab({ techniques }) {
                 )}
                 <button onClick={() => { setEditForm({ ...selected }); setEditTrade(true); setFeedback(""); setDeleteConfirmId(null); }}
                   style={{ padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>수정</button>
+                <button onClick={handleDuplicate}
+                  style={{ padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>📋 복제</button>
                 {deleteConfirmId === selected.id ? (
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <span style={{ fontSize: 12, color: "#e74c3c" }}>삭제하시겠습니까?</span>
