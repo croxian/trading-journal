@@ -618,6 +618,8 @@ function JournalTab({ techniques }) {
   const [showStockDrop, setShowStockDrop] = useState(false);
   const [editTrade, setEditTrade] = useState(false);
   const [editForm, setEditForm] = useState(null);
+  const [editImgLoading, setEditImgLoading] = useState(false);
+  const [sel0397, setSel0397] = useState(new Set());
   const pasteZoneRef = useRef(null);
 
   useEffect(() => {
@@ -740,6 +742,54 @@ function JournalTab({ techniques }) {
     } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
 
+  const handleEditImageExtract = async (file) => {
+    setEditImgLoading(true); setFeedback("");
+    try {
+      const b64 = await compressImage(file);
+      const raw = await claude("JSON만 출력.", [
+        { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
+        { type: "text", text: `키움 [0606] 자동일지차트에서 JSON 추출:\n{"stock":"종목명","date":"YYYY-MM-DD","buyPrice":매수가숫자,"sellPrice":매도가숫자,"pnlRate":수익률숫자,"chartDescription":"차트패턴설명"}\n확인불가는 null.` }
+      ], 1000);
+      const p = await parseJSON(raw);
+      setEditForm(f => ({
+        ...f, chartImg: b64,
+        ...(p.stock && { stock: p.stock }),
+        ...(p.date && { date: p.date }),
+        ...(p.buyPrice != null && { buyPrice: p.buyPrice }),
+        ...(p.sellPrice != null && { sellPrice: p.sellPrice }),
+        ...(p.pnlRate != null && { pnlRate: p.pnlRate }),
+        ...(p.chartDescription && { chartDesc: p.chartDescription }),
+      }));
+      setFeedback("✅ 차트 정보 추출 완료");
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+    setEditImgLoading(false);
+  };
+
+  const mergePending = () => {
+    if (sel0397.size < 2) return;
+    const idxs = [...sel0397].sort((a, b) => a - b);
+    const rows = idxs.map(i => pending0397[i]);
+    const totalAmt = rows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+    const totalPnl = rows.reduce((s, r) => s + (parseFloat(r.pnl) || 0), 0);
+    const merged = {
+      stock: rows[0].stock,
+      buyPrice: Math.round(rows.reduce((s, r) => s + (parseFloat(r.buyPrice) || 0), 0) / rows.length),
+      sellPrice: Math.round(rows.reduce((s, r) => s + (parseFloat(r.sellPrice) || 0), 0) / rows.length),
+      pnl: Math.round(totalPnl),
+      pnlRate: parseFloat(totalAmt > 0 ? ((totalPnl / totalAmt) * 100).toFixed(2) : 0),
+      amount: Math.round(totalAmt),
+    };
+    const next = [];
+    let inserted = false;
+    pending0397.forEach((r, i) => {
+      if (i === idxs[0] && !inserted) { next.push(merged); inserted = true; }
+      if (!sel0397.has(i)) next.push(r);
+    });
+    if (!inserted) next.push(merged);
+    setPending0397(next);
+    setSel0397(new Set());
+  };
+
   const handleEditSave = async () => {
     if (!editForm.stock || !editForm.buyPrice) { setFeedback("❌ 종목명과 매수가는 필수."); return; }
     try {
@@ -809,22 +859,36 @@ function JournalTab({ techniques }) {
                     style={{ background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "6px 10px", fontSize: 13, colorScheme: "dark" }} />
                 </div>
                 <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
-                  {pending0397.map((t, i) => (
-                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, background: "#13151f", borderRadius: 6, padding: "8px 10px", fontSize: 12 }}>
-                      <span style={{ fontWeight: 600, minWidth: 80, color: "#ddd" }}>{t.stock}</span>
-                      <span style={{ color: "#777" }}>매수 {t.buyPrice}</span>
-                      <span style={{ color: "#777" }}>매도 {t.sellPrice}</span>
-                      <span style={{ marginLeft: "auto", fontWeight: 700, color: pnlColor(parseFloat(t.pnlRate)) }}>
-                        {parseFloat(t.pnlRate) > 0 ? "+" : ""}{t.pnlRate}%
-                      </span>
-                      <button onClick={() => setPending0397(p => p.filter((_, j) => j !== i))}
-                        style={{ background: "none", border: "none", color: "#e74c3c", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "0 2px" }}>✕</button>
-                    </div>
-                  ))}
+                  {pending0397.map((t, i) => {
+                    const checked = sel0397.has(i);
+                    return (
+                      <div key={i} onClick={() => setSel0397(p => { const n = new Set(p); n.has(i) ? n.delete(i) : n.add(i); return n; })}
+                        style={{ display: "flex", alignItems: "center", gap: 8, background: checked ? "#1a2a3a" : "#13151f", border: `1px solid ${checked ? "#4f8ef7" : "transparent"}`, borderRadius: 6, padding: "8px 10px", fontSize: 12, cursor: "pointer" }}>
+                        <input type="checkbox" checked={checked} readOnly
+                          style={{ accentColor: "#4f8ef7", width: 14, height: 14, cursor: "pointer" }} />
+                        <span style={{ fontWeight: 600, minWidth: 80, color: "#ddd" }}>{t.stock}</span>
+                        <span style={{ color: "#777" }}>매수 {t.buyPrice}</span>
+                        <span style={{ color: "#777" }}>매도 {t.sellPrice}</span>
+                        <span style={{ marginLeft: "auto", fontWeight: 700, color: pnlColor(parseFloat(t.pnlRate)) }}>
+                          {parseFloat(t.pnlRate) > 0 ? "+" : ""}{t.pnlRate}%
+                        </span>
+                        <button onClick={e => { e.stopPropagation(); setPending0397(p => p.filter((_, j) => j !== i)); setSel0397(p => { const n = new Set(p); n.delete(i); return n; }); }}
+                          style={{ background: "none", border: "none", color: "#e74c3c", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "0 2px" }}>✕</button>
+                      </div>
+                    );
+                  })}
                 </div>
-                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                   <button onClick={handleBulkSave0397} style={{ padding: "8px 20px", background: "#4f8ef7", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>전체 저장</button>
-                  <button onClick={() => setPending0397([])} style={{ padding: "8px 14px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>취소</button>
+                  {sel0397.size >= 2 && (
+                    <button onClick={mergePending} style={{ padding: "8px 16px", background: "#27ae60", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>
+                      선택 머지 ({sel0397.size}건 → 1건)
+                    </button>
+                  )}
+                  {sel0397.size > 0 && (
+                    <button onClick={() => setSel0397(new Set())} style={{ padding: "8px 10px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>선택 해제</button>
+                  )}
+                  <button onClick={() => { setPending0397([]); setSel0397(new Set()); }} style={{ padding: "8px 14px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>취소</button>
                   {feedback && <span style={{ fontSize: 13, color: feedback.startsWith("✅") ? "#4caf50" : "#e74c3c" }}>{feedback}</span>}
                 </div>
               </div>
@@ -966,8 +1030,23 @@ function JournalTab({ techniques }) {
               {feedback && <div style={{ marginTop: 8, fontSize: 13, color: "#4caf50" }}>{feedback}</div>}
             </div>
           ) : (
-            <div style={box}>
-              <div style={{ fontSize: 14, fontWeight: 600, color: "#aaa", marginBottom: 14 }}>수정 중: {selected.stock}</div>
+            <div style={box} onPaste={async e => {
+              const files = [];
+              if (e.clipboardData?.items) for (const item of Array.from(e.clipboardData.items)) { if (item.type.startsWith("image/")) { const f = item.getAsFile(); if (f) files.push(f); } }
+              if (files.length > 0) { e.preventDefault(); await handleEditImageExtract(files[0]); }
+            }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#aaa", marginBottom: 12 }}>수정 중: {selected.stock}</div>
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 11, color: "#555", marginBottom: 6 }}>0606 차트로 자동채움 (선택)</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 14px", background: "#2a2d3a", border: "1px dashed #4f8ef7", borderRadius: 8, cursor: "pointer", fontSize: 12, color: "#aaa" }}>
+                    📎 [0606] 이미지
+                    <input type="file" accept="image/*" style={{ display: "none" }} onChange={async e => { const f = e.target.files[0]; if (f) { await handleEditImageExtract(f); e.target.value = ""; } }} />
+                  </label>
+                  <span style={{ fontSize: 11, color: "#555" }}>또는 Ctrl+V</span>
+                  {editImgLoading && <span style={{ fontSize: 12, color: "#aaa" }}>⏳ 추출 중...</span>}
+                </div>
+              </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
                 <div style={{ position: "relative" }}>
                   <div style={label11}>종목명 *</div>
