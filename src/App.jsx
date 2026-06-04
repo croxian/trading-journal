@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import JSZip from "jszip";
 
 // ==================== 상수 / 설정 ====================
 const TABS = ["🏠 대시보드", "📝 매매일지", "📊 통계", "📚 강의록"];
@@ -128,7 +129,6 @@ const b64ToFile = (b64, mime) => {
 };
 
 const parsePptxToSlides = async (file) => {
-  const { default: JSZip } = await import("jszip");
   const zip = await JSZip.loadAsync(await file.arrayBuffer());
   const ALLOWED_EXT = ["png","jpg","jpeg","gif","bmp","webp"];
 
