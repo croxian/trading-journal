@@ -1193,7 +1193,7 @@ function JournalTab({ techniques }) {
   };
 
   const handleDuplicate = async () => {
-    const dup = { ...selected, id: Date.now(), createdAt: new Date().toLocaleDateString("ko-KR"), chartImg: null, aiAnalysis: "", deletedAt: null };
+    const dup = { ...selected, id: Date.now(), createdAt: new Date().toLocaleDateString("ko-KR"), deletedAt: null };
     try {
       await sbUpsert("trades", [tradeToRow(dup)]);
       setTrades(p => [dup, ...p]);
