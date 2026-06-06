@@ -1196,7 +1196,7 @@ function JournalTab({ techniques }) {
   };
 
   const handleEditSave = async () => {
-    if (!editForm.stock || !editForm.buyPrice) { setFeedback("❌ 종목명과 매수가는 필수."); return; }
+    if (!editForm.stock) { setFeedback("❌ 종목명은 필수."); return; }
     try {
       await sbUpsert("trades", [tradeToRow(editForm)]);
       setTrades(p => p.map(t => t.id === editForm.id ? editForm : t));
@@ -1902,7 +1902,7 @@ function JournalTab({ techniques }) {
                   <input type="date" value={editForm.date || ""} onChange={e => setEditForm(p => ({ ...p, date: e.target.value }))}
                     style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box", colorScheme: "dark" }} />
                 </div>
-                {[["buyPrice","매수가 *","number"],["sellPrice","매도가","number"],["amount","매입금액","number"],["pnl","실현손익","number"],["pnlRate","수익률 (%)","number"]].map(([f,p,t]) => (
+                {[["buyPrice","매수가","number"],["sellPrice","매도가","number"],["amount","매입금액","number"],["pnl","실현손익","number"],["pnlRate","수익률 (%)","number"]].map(([f,p,t]) => (
                   <div key={f}>
                     <div style={label11}>{p}</div>
                     <input type={t} value={editForm[f] ?? ""} onChange={e => setEditForm(prev => autoCalc(prev, f, e.target.value))} placeholder={p}
