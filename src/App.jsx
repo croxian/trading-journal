@@ -1134,7 +1134,7 @@ function JournalTab({ techniques }) {
       const pastTradesArr = trades.filter(t => t.id !== selected.id && !t.deletedAt && t.reason).slice(0, 15);
       const pastTrades = pastTradesArr
         .map(t => `[ID:${t.id}] ${t.stock}(${t.date}, ${t.pnlRate}%): ${t.reason?.slice(0, 80)}`).join('\n');
-      const result = await claude("주식 매매 분석 전문가. 핵심만 간결하게.",
+      const result = await claude("주식 매매 분석 전문가. 핵심만 간결하게. [중요] '정답매매'는 사용자가 실제 실행한 매매가 아닌, 해당 기법 기준으로 올바르게 했어야 할 이상적 시나리오다. 절대 실제 매매 내용을 정답매매로 제시하지 않는다.",
         `[표기 규칙] 매매이유에서 괄호 안 숫자는 만원 단위임. 예: (+50)=+50만원 수익, (1000)=1000만원 매수금액, (-30)=-30만원 손실. "n만원"이라고 쓰지 않고 숫자만 씀.\n\n[현재 매매] 종목:${selected.stock} 날짜:${selected.date} 수익률:${selected.pnlRate}%\n매매이유: ${selected.reason}\n\n[강의록 기법]\n${techSummary || "(없음)"}\n\n[과거 유사 매매 참고]\n${pastTrades || "(없음)"}\n\n아래 항목을 분석:\n1. 강의록 기법 매칭 (적용된 기법과 근거)\n2. 정답매매: 해당 기법 기준 이상적 매매 시나리오 (실제 내가 한 매매가 아닌, 기법대로라면 어떻게 매수/손절/익절해야 했는지). 금액은 같은 표기 규칙으로 괄호 안 숫자(만원)로 표기, 퍼센트 금지\n3. 현재 매매의 잘된 점 / 개선할 점\n4. 과거 유사 매매와 비교\n\n※ 응답 맨 마지막 줄에 과거 유사 매매 중 가장 유사한 것 최대 5개의 ID를 아래 형식으로만 출력(다른 텍스트 없이): SIMILAR:[id1,id2,...]`, 2200);
       // 응답 끝에서 SIMILAR:[...] 추출
       const simMatch = result.match(/SIMILAR:\[([\d,\s]*)\]/);
