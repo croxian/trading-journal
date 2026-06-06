@@ -833,6 +833,8 @@ function JournalTab({ techniques }) {
   const [trashSelectMode, setTrashSelectMode] = useState(false);
   const [trashSelectedIds, setTrashSelectedIds] = useState(new Set());
   const [sortBy, setSortBy] = useState("date_desc");
+  const [techFilter, setTechFilter] = useState(new Set());
+  const [showTechDrop, setShowTechDrop] = useState(false);
   const pasteZoneRef = useRef(null);
   const tradesRef = useRef([]);
   const isMobile = useIsMobile();
@@ -900,6 +902,7 @@ function JournalTab({ techniques }) {
       default:             return s.sort((a,b) => (b.date||"").localeCompare(a.date||"") || b.id - a.id);
     }
   };
+  const applyTechFilter = (arr) => techFilter.size === 0 ? arr : arr.filter(t => techFilter.has(t.technique));
 
   const processImage = async (file, mode) => {
     setImgLoading(true); setFeedback("");
@@ -1341,17 +1344,52 @@ function JournalTab({ techniques }) {
         )}
         <button onClick={() => setGroupByDate(p => !p)}
           style={{ padding: "4px 10px", background: groupByDate ? "#4f8ef7" : "#2a2d3a", border: "none", color: groupByDate ? "#fff" : "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>📅 날짜별</button>
-        {view === "list" && !selected && listTab !== "trash" && (
-          <select value={sortBy} onChange={e => setSortBy(e.target.value)}
-            style={{ background: "#2a2d3a", border: "1px solid #3a3d4a", color: "#aaa", borderRadius: 5, padding: "4px 8px", fontSize: 12, cursor: "pointer" }}>
-            <option value="date_desc">최근 날짜순 ↓</option>
-            <option value="date_asc">오래된 날짜순 ↑</option>
-            <option value="pnlRate_desc">수익률 높은순 ↓</option>
-            <option value="pnlRate_asc">수익률 낮은순 ↑</option>
-            <option value="pnl_desc">수익금 높은순 ↓</option>
-            <option value="pnl_asc">수익금 낮은순 ↑</option>
-          </select>
-        )}
+        {view === "list" && !selected && listTab !== "trash" && (() => {
+          const allTechs = [...new Set(trades.filter(t => !t.isWatched && t.technique).map(t => t.technique))].sort();
+          return (
+            <>
+              <div style={{ position: "relative" }}>
+                <button onClick={() => setShowTechDrop(p => !p)}
+                  style={{ padding: "4px 10px", background: techFilter.size > 0 ? "#4f8ef7" : "#2a2d3a", border: "none", color: techFilter.size > 0 ? "#fff" : "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12, whiteSpace: "nowrap" }}>
+                  🏷 기법{techFilter.size > 0 ? ` (${techFilter.size})` : ""}
+                </button>
+                {showTechDrop && (
+                  <>
+                    <div onClick={() => setShowTechDrop(false)} style={{ position: "fixed", inset: 0, zIndex: 199 }} />
+                    <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 200, background: "#1a1d27", border: "1px solid #2a2d3a", borderRadius: 8, padding: "8px 4px", minWidth: 160, boxShadow: "0 4px 20px #0009" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 8px 6px", borderBottom: "1px solid #2a2d3a", marginBottom: 4 }}>
+                        <span style={{ fontSize: 11, color: "#888" }}>기법 필터</span>
+                        <button onClick={() => setTechFilter(new Set())} style={{ fontSize: 10, background: "none", border: "none", color: "#4f8ef7", cursor: "pointer", padding: 0 }}>전체 해제</button>
+                      </div>
+                      {allTechs.length === 0
+                        ? <div style={{ fontSize: 11, color: "#555", padding: "4px 8px" }}>기법 없음</div>
+                        : allTechs.map(tech => (
+                          <label key={tech} style={{ display: "flex", alignItems: "center", gap: 7, padding: "4px 10px", cursor: "pointer", fontSize: 12, color: "#ddd", borderRadius: 4 }}
+                            onMouseEnter={e => e.currentTarget.style.background = "#2a2d3a"}
+                            onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                            <input type="checkbox" checked={techFilter.has(tech)}
+                              onChange={() => setTechFilter(prev => { const n = new Set(prev); n.has(tech) ? n.delete(tech) : n.add(tech); return n; })}
+                              style={{ accentColor: "#4f8ef7", cursor: "pointer" }} />
+                            {tech}
+                          </label>
+                        ))
+                      }
+                    </div>
+                  </>
+                )}
+              </div>
+              <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+                style={{ background: "#2a2d3a", border: "1px solid #3a3d4a", color: "#aaa", borderRadius: 5, padding: "4px 8px", fontSize: 12, cursor: "pointer" }}>
+                <option value="date_desc">최근 날짜순 ↓</option>
+                <option value="date_asc">오래된 날짜순 ↑</option>
+                <option value="pnlRate_desc">수익률 높은순 ↓</option>
+                <option value="pnlRate_asc">수익률 낮은순 ↑</option>
+                <option value="pnl_desc">수익금 높은순 ↓</option>
+                <option value="pnl_asc">수익금 낮은순 ↑</option>
+              </select>
+            </>
+          );
+        })()}
         <button onClick={load} style={{ marginLeft: "auto", padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>🔄</button>
       </div>
 
@@ -1675,7 +1713,7 @@ function JournalTab({ techniques }) {
 
       {!loading && view === "list" && !selected && listTab !== "trash" && (() => {
         const isWatch = listTab === "watchlist";
-        const filtered = trades.filter(t => isWatch ? t.isWatched : !t.isWatched);
+        const filtered = applyTechFilter(trades.filter(t => isWatch ? t.isWatched : !t.isWatched));
         const sorted = sortTrades(filtered);
         if (sorted.length === 0) return <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>{isWatch ? "관심종목 없음" : "매매 기록 없음"}</div>;
 
@@ -1746,7 +1784,7 @@ function JournalTab({ techniques }) {
       })()}
 
       {!loading && view === "detail" && selected && (() => {
-        const detailFiltered = sortTrades(trades.filter(t => listTab === "watchlist" ? t.isWatched : !t.isWatched));
+        const detailFiltered = sortTrades(applyTechFilter(trades.filter(t => listTab === "watchlist" ? t.isWatched : !t.isWatched)));
         const detailIdx = detailFiltered.findIndex(t => t.id === selected.id);
         return (
         <div>
