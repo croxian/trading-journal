@@ -1029,6 +1029,26 @@ function JournalTab({ techniques }) {
     return n(a) === n(b) || n(a).includes(n(b)) || n(b).includes(n(a));
   };
 
+  const merge0397Rows = (rows) => {
+    if (!rows || rows.length === 0) return null;
+    if (rows.length === 1) return rows[0];
+    const totalBuyAmt = rows.reduce((s, t) => s + (parseFloat(t.buyAmount) || 0), 0);
+    const totalPnl    = rows.reduce((s, t) => s + (parseFloat(t.pnl)       || 0), 0);
+    const wavg = (key) => totalBuyAmt > 0
+      ? rows.reduce((s, t) => s + (parseFloat(t[key]) || 0) * (parseFloat(t.buyAmount) || 0), 0) / totalBuyAmt
+      : rows.reduce((s, t) => s + (parseFloat(t[key]) || 0), 0) / rows.length;
+    return {
+      ...rows[0],
+      buyPrice:  Math.round(wavg("buyPrice")),
+      sellPrice: Math.round(wavg("sellPrice")),
+      buyAmount: Math.round(totalBuyAmt),
+      pnl:       Math.round(totalPnl),
+      pnlRate:   totalBuyAmt > 0
+        ? parseFloat((totalPnl / totalBuyAmt * 100).toFixed(2))
+        : parseFloat((rows.reduce((s,t) => s + (parseFloat(t.pnlRate)||0), 0) / rows.length).toFixed(2)),
+    };
+  };
+
   const calcSimilarTrades = (trade, allTrades) =>
     allTrades
       .filter(t => t.id !== trade.id && !t.deletedAt && matchStock(t.stock, trade.stock))
@@ -1943,8 +1963,9 @@ function JournalTab({ techniques }) {
                   ], 1200);
                   const p = await parseJSON(raw);
                   const tl = Array.isArray(p) ? p : (p.trades || []);
-                  const m = tl.find(t => matchStock(t.stock, editForm?.stock)) || tl[0];
-                  if (m) { setEditForm(f => ({ ...f, buyPrice: m.buyPrice ?? f.buyPrice, sellPrice: m.sellPrice ?? f.sellPrice, pnl: m.pnl ?? f.pnl, pnlRate: m.pnlRate ?? f.pnlRate, amount: m.buyAmount ?? f.amount })); setFeedback("✅ 재무 데이터 채워짐"); }
+                  const matches = editForm?.stock ? tl.filter(t => matchStock(t.stock, editForm.stock)) : [];
+                  const m = merge0397Rows(matches.length > 0 ? matches : tl.slice(0, 1));
+                  if (m) { setEditForm(f => ({ ...f, buyPrice: m.buyPrice ?? f.buyPrice, sellPrice: m.sellPrice ?? f.sellPrice, pnl: m.pnl ?? f.pnl, pnlRate: m.pnlRate ?? f.pnlRate, amount: m.buyAmount ?? f.amount })); setFeedback(matches.length > 1 ? `✅ ${matches.length}건 머지됨` : "✅ 재무 데이터 채워짐"); }
                   else setFeedback("❌ 매칭 종목 없음");
                 } catch (err) { setFeedback(`❌ ${err.message}`); }
                 setEditImgLoading(false);
@@ -1970,8 +1991,9 @@ function JournalTab({ techniques }) {
                       setEditImgLoading(true); setFeedback("");
                       try {
                         const trades = await extract0397Trades(f);
-                        const m = trades.find(t => matchStock(t.stock, editForm?.stock)) || trades[0];
-                        if (m) { setEditForm(prev => ({ ...prev, buyPrice: m.buyPrice ?? prev.buyPrice, sellPrice: m.sellPrice ?? prev.sellPrice, pnl: m.pnl ?? prev.pnl, pnlRate: m.pnlRate ?? prev.pnlRate, amount: m.buyAmount ?? prev.amount })); setFeedback("✅ 재무 데이터 채워짐"); }
+                        const matches = editForm?.stock ? trades.filter(t => matchStock(t.stock, editForm.stock)) : [];
+                        const m = merge0397Rows(matches.length > 0 ? matches : trades.slice(0, 1));
+                        if (m) { setEditForm(prev => ({ ...prev, buyPrice: m.buyPrice ?? prev.buyPrice, sellPrice: m.sellPrice ?? prev.sellPrice, pnl: m.pnl ?? prev.pnl, pnlRate: m.pnlRate ?? prev.pnlRate, amount: m.buyAmount ?? prev.amount })); setFeedback(matches.length > 1 ? `✅ ${matches.length}건 머지됨` : "✅ 재무 데이터 채워짐"); }
                         else setFeedback("❌ 매칭 없음");
                       } catch (err) { setFeedback(`❌ ${err.message}`); }
                       setEditImgLoading(false); e.target.value = "";
