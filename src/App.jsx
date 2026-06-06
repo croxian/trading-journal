@@ -87,6 +87,30 @@ const categoryColor = (cat) => {
   }[cat] || "#7f8c8d");
 };
 const pnlColor = (v) => v > 0 ? "#4caf50" : v < 0 ? "#e74c3c" : "#aaa";
+const autoCalc = (form, field, value) => {
+  const next = { ...form, [field]: value };
+  const buy = parseFloat(next.buyPrice) || 0;
+  const sell = parseFloat(next.sellPrice) || 0;
+  const amt = parseFloat(next.amount) || 0;
+  if (field === "buyPrice" || field === "sellPrice") {
+    if (buy > 0 && sell > 0) {
+      next.pnlRate = parseFloat(((sell - buy) / buy * 100).toFixed(2));
+      if (amt > 0) next.pnl = Math.round(amt * (sell - buy) / buy);
+    }
+  } else if (field === "amount") {
+    if (amt > 0) {
+      if (buy > 0 && sell > 0) next.pnl = Math.round(amt * (sell - buy) / buy);
+      else if (parseFloat(next.pnlRate)) next.pnl = Math.round(amt * parseFloat(next.pnlRate) / 100);
+    }
+  } else if (field === "pnlRate") {
+    const rate = parseFloat(value) || 0;
+    if (amt > 0 && rate !== 0) next.pnl = Math.round(amt * rate / 100);
+  } else if (field === "pnl") {
+    const pnlVal = parseFloat(value) || 0;
+    if (amt > 0 && pnlVal !== 0) next.pnlRate = parseFloat((pnlVal / amt * 100).toFixed(2));
+  }
+  return next;
+};
 
 const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_KEY || "";
 const claude = async (system, userContent, maxTokens = 1000) => {
@@ -1259,7 +1283,7 @@ function JournalTab({ techniques }) {
   };
 
   const inp = (field, placeholder, type = "text") => (
-    <input type={type} value={form[field] || ""} onChange={e => setForm(p => ({ ...p, [field]: e.target.value }))} placeholder={placeholder}
+    <input type={type} value={form[field] ?? ""} onChange={e => setForm(p => autoCalc(p, field, e.target.value))} placeholder={placeholder}
       style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box", textAlign: "left" }} />
   );
 
@@ -1881,7 +1905,7 @@ function JournalTab({ techniques }) {
                 {[["buyPrice","매수가 *","number"],["sellPrice","매도가","number"],["amount","매입금액","number"],["pnl","실현손익","number"],["pnlRate","수익률 (%)","number"]].map(([f,p,t]) => (
                   <div key={f}>
                     <div style={label11}>{p}</div>
-                    <input type={t} value={editForm[f] ?? ""} onChange={e => setEditForm(prev => ({ ...prev, [f]: e.target.value }))} placeholder={p}
+                    <input type={t} value={editForm[f] ?? ""} onChange={e => setEditForm(prev => autoCalc(prev, f, e.target.value))} placeholder={p}
                       style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box" }} />
                   </div>
                 ))}
