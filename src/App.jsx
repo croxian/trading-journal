@@ -823,6 +823,7 @@ function JournalTab({ techniques }) {
   const [groupByDate, setGroupByDate] = useState(false);
   const [detailAiAnalysis, setDetailAiAnalysis] = useState("");
   const [detailAiLoading, setDetailAiLoading] = useState(false);
+  const [similarTrades, setSimilarTrades] = useState([]);
   const [listTab, setListTab] = useState("trades");
   const [trashTrades, setTrashTrades] = useState([]);
   const [trashLoading, setTrashLoading] = useState(false);
@@ -856,7 +857,7 @@ function JournalTab({ techniques }) {
 
   const openDetail = async (trade) => {
     window.history.pushState({ ...(window.history.state || {}), journalView: "detail", journalId: trade.id }, "");
-    setSelected(trade); setView("detail"); setFeedback(""); setEditTrade(false); setDetailAiAnalysis("");
+    setSelected(trade); setView("detail"); setFeedback(""); setEditTrade(false); setDetailAiAnalysis(""); setSimilarTrades([]);
     setDetailImgLoading(true);
     const img = await sbGetChartImg(trade.id);
     setSelected(prev => prev?.id === trade.id ? { ...prev, chartImg: img } : prev);
@@ -877,7 +878,7 @@ function JournalTab({ techniques }) {
           sbGetChartImg(t.id).then(img => setSelected(p => p?.id === t.id ? { ...p, chartImg: img } : p)).finally(() => setDetailImgLoading(false));
         }
       } else {
-        setView("list"); setSelected(null); setEditTrade(false); setFeedback(""); setDetailAiAnalysis("");
+        setView("list"); setSelected(null); setEditTrade(false); setFeedback(""); setDetailAiAnalysis(""); setSimilarTrades([]);
       }
     };
     window.addEventListener("popstate", handlePop);
@@ -1093,6 +1094,11 @@ function JournalTab({ techniques }) {
       const result = await claude("주식 매매 분석 전문가. 핵심만 간결하게.",
         `[현재 매매] 종목:${selected.stock} 날짜:${selected.date} 수익률:${selected.pnlRate}%\n매매이유: ${selected.reason}\n\n[강의록 기법]\n${techSummary || "(없음)"}\n\n[과거 유사 매매]\n${pastTrades || "(없음)"}\n\n아래 항목을 분석:\n1. 강의록 기법 매칭 (적용된 기법)\n2. 과거 유사 매매와 비교\n3. 잘된 점 / 개선할 점`, 2000);
       setDetailAiAnalysis(result);
+      const similar = trades
+        .filter(t => t.id !== selected.id && !t.deletedAt && matchStock(t.stock, selected.stock))
+        .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
+        .slice(0, 8);
+      setSimilarTrades(similar);
     } catch (e) { setFeedback(`❌ ${e.message}`); }
     setDetailAiLoading(false);
   };
@@ -1747,7 +1753,7 @@ function JournalTab({ techniques }) {
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
             <button onClick={() => {
               window.history.replaceState({ ...(window.history.state || {}), journalView: "list" }, "");
-              setView("list"); setSelected(null); setEditTrade(false); setFeedback(""); setDetailAiAnalysis("");
+              setView("list"); setSelected(null); setEditTrade(false); setFeedback(""); setDetailAiAnalysis(""); setSimilarTrades([]);
             }} style={{ background: "none", border: "none", color: "#4f8ef7", cursor: "pointer", fontSize: 13 }}>← 목록</button>
             <span style={{ flex: 1 }} />
             <button onClick={() => openDetail(detailFiltered[detailIdx - 1])} disabled={detailIdx <= 0}
@@ -1857,6 +1863,19 @@ function JournalTab({ techniques }) {
                   )}
                 </div>
                 {detailAiAnalysis && <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad", whiteSpace: "pre-wrap", lineHeight: 1.7 }}>{detailAiAnalysis}</div>}
+                {similarTrades.length > 0 && (
+                  <div style={{ marginTop: 10, padding: "10px 12px", background: "#12161e", border: "1px solid #2a2d3a", borderRadius: 8 }}>
+                    <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>📎 같은 종목 다른 매매 ({similarTrades.length}건)</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {similarTrades.map(t => (
+                        <button key={t.id} onClick={() => openDetail(t)}
+                          style={{ padding: "4px 12px", background: "#1a2030", border: `1px solid ${pnlColor(parseFloat(t.pnlRate))}55`, borderRadius: 20, cursor: "pointer", fontSize: 11, color: pnlColor(parseFloat(t.pnlRate)), whiteSpace: "nowrap" }}>
+                          {t.date}&nbsp;&nbsp;{parseFloat(t.pnlRate) > 0 ? "+" : ""}{t.pnlRate}%
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
               {feedback && <div style={{ marginTop: 8, fontSize: 13, color: "#4caf50" }}>{feedback}</div>}
             </div>
