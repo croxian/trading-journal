@@ -1645,7 +1645,7 @@ function JournalTab({ techniques }) {
               {[["reason","매매 이유","왜 이 자리에서 매수/매도했는지..."],["memo","메모","추가 메모..."]].map(([f,lbl,ph]) => (
                 <div key={f} style={{ marginBottom: 10 }}>
                   <div style={label11}>{lbl}</div>
-                  <textarea value={form[f]} onChange={e => setForm(p => ({ ...p, [f]: e.target.value }))} placeholder={ph}
+                  <textarea value={form[f]} onChange={e => setForm(p => ({ ...p, [f]: e.target.value }))} onPaste={e => e.stopPropagation()} placeholder={ph}
                     style={{ width: "100%", minHeight: f === "reason" ? 80 : 60, background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: 10, fontSize: 13, resize: "vertical", boxSizing: "border-box", textAlign: "left" }} />
                 </div>
               ))}
@@ -2027,7 +2027,7 @@ function JournalTab({ techniques }) {
               {[["reason","매매 이유","왜 이 자리에서 매수/매도했는지..."],["memo","메모","추가 메모..."]].map(([f,lbl,ph]) => (
                 <div key={f} style={{ marginBottom: 10 }}>
                   <div style={label11}>{lbl}</div>
-                  <textarea value={editForm[f] || ""} onChange={e => setEditForm(p => ({ ...p, [f]: e.target.value }))} placeholder={ph}
+                  <textarea value={editForm[f] || ""} onChange={e => setEditForm(p => ({ ...p, [f]: e.target.value }))} onPaste={e => e.stopPropagation()} placeholder={ph}
                     style={{ width: "100%", minHeight: f === "reason" ? 80 : 60, background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: 10, fontSize: 13, resize: "vertical", boxSizing: "border-box" }} />
                 </div>
               ))}
