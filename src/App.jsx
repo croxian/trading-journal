@@ -111,6 +111,13 @@ const autoCalc = (form, field, value) => {
   }
   return next;
 };
+const fmtNum = (v) => {
+  if (v === "" || v == null) return "";
+  const s = String(v).replace(/,/g, "");
+  if (s === "-") return "-";
+  const n = parseFloat(s);
+  return isNaN(n) ? "" : Math.round(n).toLocaleString("ko-KR");
+};
 
 const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_KEY || "";
 const claude = async (system, userContent, maxTokens = 1000) => {
@@ -1282,10 +1289,22 @@ function JournalTab({ techniques }) {
     } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
 
-  const inp = (field, placeholder, type = "text") => (
-    <input type={type} value={form[field] ?? ""} onChange={e => setForm(p => autoCalc(p, field, e.target.value))} placeholder={placeholder}
-      style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box", textAlign: "left" }} />
-  );
+  const inp = (field, placeholder, type = "text") => {
+    const comma = type === "numcomma";
+    return (
+      <input
+        type={comma ? "text" : type}
+        inputMode={comma ? "numeric" : undefined}
+        value={comma ? fmtNum(form[field]) : (form[field] ?? "")}
+        onChange={e => {
+          const val = comma ? e.target.value.replace(/,/g, "") : e.target.value;
+          setForm(p => autoCalc(p, field, val));
+        }}
+        placeholder={placeholder}
+        style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box", textAlign: "left" }}
+      />
+    );
+  };
 
   return (
     <div>
@@ -1544,7 +1563,7 @@ function JournalTab({ techniques }) {
                   </label>
                   {fill0397Loading && <span style={{ fontSize: 11, color: "#aaa" }}>⏳</span>}
                 </div>
-                {[["buyPrice","매수가 *","number"],["sellPrice","매도가","number"],["amount","매입금액","number"],["pnl","실현손익","number"],["pnlRate","수익률 (%)","number"]].map(([f,p,t]) => (
+                {[["buyPrice","매수가 *","numcomma"],["sellPrice","매도가","numcomma"],["amount","매입금액","numcomma"],["pnl","실현손익","numcomma"],["pnlRate","수익률 (%)","number"]].map(([f,p,t]) => (
                   <div key={f}><div style={label11}>{p}</div>{inp(f, p, t)}</div>
                 ))}
                 <div>
@@ -1902,13 +1921,24 @@ function JournalTab({ techniques }) {
                   <input type="date" value={editForm.date || ""} onChange={e => setEditForm(p => ({ ...p, date: e.target.value }))}
                     style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box", colorScheme: "dark" }} />
                 </div>
-                {[["buyPrice","매수가","number"],["sellPrice","매도가","number"],["amount","매입금액","number"],["pnl","실현손익","number"],["pnlRate","수익률 (%)","number"]].map(([f,p,t]) => (
+                {[["buyPrice","매수가","numcomma"],["sellPrice","매도가","numcomma"],["amount","매입금액","numcomma"],["pnl","실현손익","numcomma"],["pnlRate","수익률 (%)","number"]].map(([f,p,t]) => {
+                  const comma = t === "numcomma";
+                  return (
                   <div key={f}>
                     <div style={label11}>{p}</div>
-                    <input type={t} value={editForm[f] ?? ""} onChange={e => setEditForm(prev => autoCalc(prev, f, e.target.value))} placeholder={p}
+                    <input
+                      type={comma ? "text" : t}
+                      inputMode={comma ? "numeric" : undefined}
+                      value={comma ? fmtNum(editForm[f]) : (editForm[f] ?? "")}
+                      onChange={e => {
+                        const val = comma ? e.target.value.replace(/,/g, "") : e.target.value;
+                        setEditForm(prev => autoCalc(prev, f, val));
+                      }}
+                      placeholder={p}
                       style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box" }} />
                   </div>
-                ))}
+                  );
+                })}
                 <div>
                   <div style={label11}>매매 카테고리</div>
                   <select value={TRADE_CATEGORIES.includes(editForm.technique) ? editForm.technique : (editForm.technique ? "기타" : "")}
