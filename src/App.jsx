@@ -1799,12 +1799,16 @@ function JournalTab({ techniques }) {
                 )}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 14 }}>
-                {[["매수가", selected.buyPrice], ["매도가", selected.sellPrice], ["수익률", `${selected.pnlRate}%`], ["실현손익", selected.pnl], ["매입금액", selected.amount]].map(([l, v]) => (
+                {[["매수가", selected.buyPrice], ["매도가", selected.sellPrice], ["수익률", `${selected.pnlRate}%`], ["실현손익", selected.pnl], ["매입금액", selected.amount]].map(([l, v]) => {
+                  const needsComma = ["매수가","매도가","실현손익","매입금액"].includes(l);
+                  const display = needsComma ? (fmtNum(v) || "-") : (v || "-");
+                  return (
                   <div key={l} style={{ background: "#13151f", borderRadius: 6, padding: "8px 10px" }}>
                     <div style={label11}>{l}</div>
-                    <div style={{ fontSize: 14, fontWeight: 600, color: ["수익률","실현손익"].includes(l) ? pnlColor(parseFloat(v)) : "#ddd" }}>{v || "-"}</div>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: ["수익률","실현손익"].includes(l) ? pnlColor(parseFloat(v)) : "#ddd" }}>{display}</div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
               {selected.reason && <div style={{ marginBottom: 10 }}><div style={label11}>매매 이유</div><div style={val14}>{selected.reason}</div></div>}
               {selected.memo && <div style={{ marginBottom: 10 }}><div style={label11}>메모</div><div style={val14}>{selected.memo}</div></div>}
