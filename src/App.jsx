@@ -220,7 +220,7 @@ const parseXlsCsvToTrades = async (file) => {
   const mapped = rows
     .filter(r => r['종목명'] || r['종목'])
     .map(r => ({
-      stock: (r['종목명'] || r['종목'] || '').replace(/^'/, '').trim(),
+      stock: (r['종목명'] || r['종목'] || '').replace(/^[*']/, '').trim(),
       date: (r['일자'] || r['날짜'] || '').replace(/\//g, '-').trim(),
       qty: num(r['수량']),
       buyAmt: num(r['매입금액'] || r['매수금액']),
@@ -985,7 +985,10 @@ function JournalTab({ techniques }) {
 
   const matchStock = (a, b) => {
     if (!a || !b) return false;
-    const n = s => s.replace(/\s+/g, "").toLowerCase();
+    const n = s => s.replace(/\s+/g, "").replace(/^\*/, "").toLowerCase();
+    const isPref = s => /우[A-Z]?$/.test(s.replace(/\s+/g, ""));
+    // 우선주는 이름이 정확히 일치할 때만 매칭
+    if (isPref(a) || isPref(b)) return n(a) === n(b);
     return n(a) === n(b) || n(a).includes(n(b)) || n(b).includes(n(a));
   };
 
