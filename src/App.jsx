@@ -1011,7 +1011,7 @@ function JournalTab({ techniques }) {
     setDetailAiLoading(true); setDetailAiAnalysis("");
     try {
       const techSummary = techniques.slice(0, 15).map(t =>
-        `[${t.name}] 카테고리:${t.category} / 매수조건:${t.entry?.condition} / 트리거:${t.pattern?.trigger}${t.rawInput ? ` / 원문:${t.rawInput.slice(0, 200)}` : ''}`
+        `[${t.name}] 카테고리:${t.category} / 매수조건:${t.entry?.condition} / 트리거:${t.pattern?.trigger}${t.rawInput ? ` / 원문:${t.rawInput}` : ''}`
       ).join('\n');
       const pastTrades = trades.filter(t => t.id !== selected.id && t.reason).slice(0, 15)
         .map(t => `${t.stock}(${t.date}, ${t.pnlRate}%): ${t.reason?.slice(0, 80)}`).join('\n');
