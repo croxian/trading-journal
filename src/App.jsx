@@ -1828,7 +1828,7 @@ function JournalTab({ techniques }) {
       })()}
 
       {!loading && view === "detail" && selected && (() => {
-        const detailFiltered = sortTrades(applyTechFilter(trades.filter(t => listTab === "watchlist" ? t.isWatched : !t.isWatched)));
+        const detailFiltered = sortTrades(applyTechFilter(trades.filter(t => selected.isWatched ? t.isWatched : !t.isWatched)));
         const detailIdx = detailFiltered.findIndex(t => t.id === selected.id);
         return (
         <div>
