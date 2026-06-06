@@ -1049,11 +1049,22 @@ function JournalTab({ techniques }) {
     };
   };
 
-  const calcSimilarTrades = (trade, allTrades) =>
-    allTrades
-      .filter(t => t.id !== trade.id && !t.deletedAt && matchStock(t.stock, trade.stock))
-      .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
-      .slice(0, 8);
+  const calcSimilarTrades = (trade, allTrades) => {
+    const src = `${trade.reason || ""} ${trade.memo || ""}`.trim();
+    if (!src) return [];
+    const tokens = [...new Set(src.split(/[\s,./!?()\[\]「」『』【】]+/).filter(w => w.length >= 2))];
+    return allTrades
+      .filter(t => t.id !== trade.id && !t.deletedAt && (t.reason || t.memo))
+      .map(t => {
+        const txt = `${t.reason || ""} ${t.memo || ""}`;
+        const score = tokens.reduce((s, w) => s + (txt.includes(w) ? 1 : 0), 0);
+        return { t, score };
+      })
+      .filter(({ score }) => score > 0)
+      .sort((a, b) => b.score - a.score || (b.t.date || "").localeCompare(a.t.date || ""))
+      .slice(0, 8)
+      .map(({ t }) => t);
+  };
 
   const fillFormFrom0397 = async (file) => {
     setFill0397Loading(true); setFeedback("");
@@ -1123,7 +1134,7 @@ function JournalTab({ techniques }) {
       const pastTrades = trades.filter(t => t.id !== selected.id && t.reason).slice(0, 15)
         .map(t => `${t.stock}(${t.date}, ${t.pnlRate}%): ${t.reason?.slice(0, 80)}`).join('\n');
       const result = await claude("주식 매매 분석 전문가. 핵심만 간결하게.",
-        `[현재 매매] 종목:${selected.stock} 날짜:${selected.date} 수익률:${selected.pnlRate}%\n매매이유: ${selected.reason}\n\n[강의록 기법]\n${techSummary || "(없음)"}\n\n[과거 유사 매매 참고]\n${pastTrades || "(없음)"}\n\n아래 항목을 분석:\n1. 강의록 기법 매칭 (적용된 기법과 근거)\n2. 정답매매: 해당 기법 기준 이상적 매매 시나리오 (실제 내가 한 매매가 아닌, 기법대로라면 어떻게 매수/손절/익절해야 했는지)\n3. 현재 매매의 잘된 점 / 개선할 점\n4. 과거 유사 매매와 비교`, 2000);
+        `[현재 매매] 종목:${selected.stock} 날짜:${selected.date} 수익률:${selected.pnlRate}%\n매매이유: ${selected.reason}\n\n[강의록 기법]\n${techSummary || "(없음)"}\n\n[과거 유사 매매 참고]\n${pastTrades || "(없음)"}\n\n아래 항목을 분석:\n1. 강의록 기법 매칭 (적용된 기법과 근거)\n2. 정답매매: 해당 기법 기준 이상적 매매 시나리오 (실제 내가 한 매매가 아닌, 기법대로라면 어떻게 매수/손절/익절해야 했는지). 가격은 반드시 n만원 단위로 표기(예: 42만원, 4.25만원), 퍼센트 표기 금지\n3. 현재 매매의 잘된 점 / 개선할 점\n4. 과거 유사 매매와 비교`, 2000);
       setDetailAiAnalysis(result);
       const similar = trades
         .filter(t => t.id !== selected.id && !t.deletedAt && matchStock(t.stock, selected.stock))
