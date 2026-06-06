@@ -264,11 +264,22 @@ const box = { background: "#1a1d27", borderRadius: 10, border: "1px solid #2a2d3
 const label11 = { fontSize: 11, color: "#555", marginBottom: 3, textAlign: "left" };
 const val14 = { fontSize: 14, color: "#ddd", background: "#13151f", padding: "8px 10px", borderRadius: 6, whiteSpace: "pre-wrap", lineHeight: 1.6, textAlign: "left" };
 
+const useIsMobile = () => {
+  const [w, setW] = useState(window.innerWidth);
+  useEffect(() => {
+    const h = () => setW(window.innerWidth);
+    window.addEventListener("resize", h);
+    return () => window.removeEventListener("resize", h);
+  }, []);
+  return w < 640;
+};
+
 // ==================== 대시보드 탭 ====================
 function DashboardTab({ onNavigate }) {
   const [trades, setTrades] = useState([]);
   const [techniques, setTechniques] = useState([]);
   const [loading, setLoading] = useState(true);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     Promise.all([sbGetTrades(), sbGet("techniques")])
@@ -311,7 +322,7 @@ function DashboardTab({ onNavigate }) {
   return (
     <div style={{ color: "#e0e0e0" }}>
       {/* KPI 카드 */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2,1fr)" : "repeat(4,1fr)", gap: 10, marginBottom: 16 }}>
         {[
           ["총 매매", total, "#ddd"],
           ["승률", `${winRate}%`, parseFloat(winRate) >= 50 ? "#4caf50" : "#e74c3c"],
@@ -325,7 +336,7 @@ function DashboardTab({ onNavigate }) {
         ))}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12, marginBottom: 12 }}>
         {/* 평균 수익/손실 */}
         <div style={box}>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>평균 수익 / 손실</div>
@@ -791,6 +802,8 @@ function JournalTab({ techniques }) {
   const [trashSelectedIds, setTrashSelectedIds] = useState(new Set());
   const [sortBy, setSortBy] = useState("date_desc");
   const pasteZoneRef = useRef(null);
+  const tradesRef = useRef([]);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     if (view === "add" && (inputMode === "img0606" || inputMode === "img0397")) {
@@ -800,12 +813,18 @@ function JournalTab({ techniques }) {
 
   const load = useCallback(async () => {
     setLoading(true);
-    try { const rows = await sbGetTrades(); setTrades(rows.map(rowToTrade).sort((a,b) => (b.date||"").localeCompare(a.date||"") || b.id - a.id)); }
+    try {
+      const rows = await sbGetTrades();
+      const loaded = rows.map(rowToTrade).sort((a,b) => (b.date||"").localeCompare(a.date||"") || b.id - a.id);
+      setTrades(loaded);
+      tradesRef.current = loaded;
+    }
     catch (e) { setFeedback(`❌ 로드 실패: ${e.message}`); }
     setLoading(false);
   }, []);
 
   const openDetail = async (trade) => {
+    window.history.pushState({ ...(window.history.state || {}), journalView: "detail", journalId: trade.id }, "");
     setSelected(trade); setView("detail"); setFeedback(""); setEditTrade(false); setDetailAiAnalysis("");
     setDetailImgLoading(true);
     const img = await sbGetChartImg(trade.id);
@@ -813,6 +832,28 @@ function JournalTab({ techniques }) {
     setDetailImgLoading(false);
   };
   useEffect(() => { load(); }, [load]);
+
+  // 브라우저 뒤로가기/앞으로가기 처리
+  useEffect(() => {
+    window.history.replaceState({ ...(window.history.state || {}), journalView: "list" }, "");
+    const handlePop = (e) => {
+      const s = e.state || {};
+      if (s.journalView === "detail" && s.journalId) {
+        const t = tradesRef.current.find(x => x.id === s.journalId);
+        if (t) {
+          setSelected(t); setView("detail"); setFeedback(""); setEditTrade(false); setDetailAiAnalysis("");
+          setDetailImgLoading(true);
+          sbGetChartImg(t.id).then(img => setSelected(p => p?.id === t.id ? { ...p, chartImg: img } : p)).finally(() => setDetailImgLoading(false));
+        }
+      } else {
+        setView("list"); setSelected(null); setEditTrade(false); setFeedback(""); setDetailAiAnalysis("");
+      }
+    };
+    window.addEventListener("popstate", handlePop);
+    return () => window.removeEventListener("popstate", handlePop);
+  }, []);
+
+  useEffect(() => { tradesRef.current = trades; }, [trades]);
 
   const recentStocks = [...new Set(trades.map(t => t.stock).filter(Boolean))].slice(0, 10);
 
@@ -1221,7 +1262,7 @@ function JournalTab({ techniques }) {
 
   return (
     <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
         {[
           ["trades", `📋 매매 (${trades.filter(t => !t.isWatched).length})`],
           ["watchlist", `👀 관심종목 (${trades.filter(t => t.isWatched).length})`],
@@ -1437,7 +1478,7 @@ function JournalTab({ techniques }) {
             )
           ) : (
             <div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10, marginBottom: 12 }}>
                 <div style={{ position: "relative" }}>
                   <div style={label11}>종목명 *</div>
                   <input
@@ -1658,8 +1699,10 @@ function JournalTab({ techniques }) {
         return (
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-            <button onClick={() => { setView("list"); setSelected(null); setEditTrade(false); setFeedback(""); setDetailAiAnalysis(""); }}
-              style={{ background: "none", border: "none", color: "#4f8ef7", cursor: "pointer", fontSize: 13 }}>← 목록</button>
+            <button onClick={() => {
+              window.history.replaceState({ ...(window.history.state || {}), journalView: "list" }, "");
+              setView("list"); setSelected(null); setEditTrade(false); setFeedback(""); setDetailAiAnalysis("");
+            }} style={{ background: "none", border: "none", color: "#4f8ef7", cursor: "pointer", fontSize: 13 }}>← 목록</button>
             <span style={{ flex: 1 }} />
             <button onClick={() => openDetail(detailFiltered[detailIdx - 1])} disabled={detailIdx <= 0}
               style={{ padding: "3px 10px", background: detailIdx > 0 ? "#2a2d3a" : "#1a1d27", border: "none", color: detailIdx > 0 ? "#aaa" : "#444", borderRadius: 5, cursor: detailIdx > 0 ? "pointer" : "default", fontSize: 12 }}>◀ 이전</button>
@@ -1821,7 +1864,7 @@ function JournalTab({ techniques }) {
                   </label>
                 </div>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10, marginBottom: 12 }}>
                 <div style={{ position: "relative" }}>
                   <div style={label11}>종목명 *</div>
                   <input type="text" value={editForm.stock || ""} onChange={e => setEditForm(p => ({ ...p, stock: e.target.value }))} placeholder="종목명 *"
@@ -1891,6 +1934,7 @@ function JournalTab({ techniques }) {
 function StatsTab() {
   const [trades, setTrades] = useState([]);
   const [loading, setLoading] = useState(true);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     sbGet("trades").then(rows => { setTrades(rows.map(rowToTrade)); setLoading(false); }).catch(() => setLoading(false));
@@ -1930,7 +1974,7 @@ function StatsTab() {
           </div>
         ))}
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
         <div style={box}>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>기법별 통계</div>
           {Object.entries(byTech).map(([k, v]) => (
@@ -1963,28 +2007,60 @@ export default function App() {
   const [activeTab, setActiveTab] = useState(0);
   const [techniques, setTechniques] = useState([]);
   const [showSync, setShowSync] = useState(false);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     sbGet("techniques").then(rows => setTechniques(rows.map(rowToTech))).catch(() => {});
   }, []);
 
+  const handleTabChange = (i) => {
+    window.history.pushState({ appTab: i }, "");
+    setActiveTab(i);
+  };
+
+  useEffect(() => {
+    window.history.replaceState({ appTab: 0 }, "");
+    const handlePop = (e) => {
+      if (e.state?.appTab !== undefined) setActiveTab(e.state.appTab);
+    };
+    window.addEventListener("popstate", handlePop);
+    return () => window.removeEventListener("popstate", handlePop);
+  }, []);
+
   return (
     <div style={{ fontFamily: "sans-serif", background: "#0f1117", minHeight: "100vh", color: "#e0e0e0" }}>
       {showSync && <SyncModal onClose={() => setShowSync(false)} />}
-      <div style={{ background: "#1a1d27", borderBottom: "1px solid #2a2d3a", padding: "0 20px", display: "flex", alignItems: "center" }}>
-        <span style={{ fontSize: 15, fontWeight: 700, color: "#fff", padding: "14px 0", marginRight: 20 }}>📈 매매 시스템</span>
-        {TABS.map((t, i) => (
-          <button key={i} onClick={() => setActiveTab(i)}
-            style={{ padding: "14px 18px", background: "none", border: "none", borderBottom: activeTab === i ? "2px solid #4f8ef7" : "2px solid transparent",
-              color: activeTab === i ? "#fff" : "#666", cursor: "pointer", fontSize: 14, fontWeight: activeTab === i ? 600 : 400 }}>{t}</button>
-        ))}
-        <button onClick={() => setShowSync(true)}
-          style={{ marginLeft: "auto", padding: "6px 12px", background: "#2a2d3a", border: "1px solid #3a3d4a", color: "#aaa", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>
-          📒 Notion 동기화
-        </button>
+      <div style={{ background: "#1a1d27", borderBottom: "1px solid #2a2d3a" }}>
+        {/* 모바일: 타이틀 행 */}
+        {isMobile && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderBottom: "1px solid #2a2d3a" }}>
+            <span style={{ fontSize: 14, fontWeight: 700, color: "#fff" }}>📈 매매 시스템</span>
+            <button onClick={() => setShowSync(true)}
+              style={{ padding: "5px 10px", background: "#2a2d3a", border: "1px solid #3a3d4a", color: "#aaa", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>
+              📒
+            </button>
+          </div>
+        )}
+        {/* 탭 바 */}
+        <div style={{ display: "flex", alignItems: "center", overflowX: "auto", padding: isMobile ? "0 4px" : "0 20px", scrollbarWidth: "none" }}>
+          {!isMobile && <span style={{ fontSize: 15, fontWeight: 700, color: "#fff", padding: "14px 0", marginRight: 20, whiteSpace: "nowrap" }}>📈 매매 시스템</span>}
+          {TABS.map((t, i) => (
+            <button key={i} onClick={() => handleTabChange(i)}
+              style={{ padding: isMobile ? "12px 12px" : "14px 18px", background: "none", border: "none",
+                borderBottom: activeTab === i ? "2px solid #4f8ef7" : "2px solid transparent",
+                color: activeTab === i ? "#fff" : "#666", cursor: "pointer",
+                fontSize: isMobile ? 12 : 14, fontWeight: activeTab === i ? 600 : 400, whiteSpace: "nowrap", flexShrink: 0 }}>{t}</button>
+          ))}
+          {!isMobile && (
+            <button onClick={() => setShowSync(true)}
+              style={{ marginLeft: "auto", padding: "6px 12px", background: "#2a2d3a", border: "1px solid #3a3d4a", color: "#aaa", borderRadius: 6, cursor: "pointer", fontSize: 12, whiteSpace: "nowrap" }}>
+              📒 Notion 동기화
+            </button>
+          )}
+        </div>
       </div>
-      <div style={{ padding: 20, maxWidth: 960, margin: "0 auto" }}>
-        {activeTab === 0 && <DashboardTab onNavigate={setActiveTab} />}
+      <div style={{ padding: isMobile ? 12 : 20, maxWidth: 960, margin: "0 auto" }}>
+        {activeTab === 0 && <DashboardTab onNavigate={handleTabChange} />}
         {activeTab === 1 && <JournalTab techniques={techniques} />}
         {activeTab === 2 && <StatsTab />}
         {activeTab === 3 && <LectureTab />}
