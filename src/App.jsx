@@ -1131,16 +1131,21 @@ function JournalTab({ techniques }) {
       const techSummary = techniques.slice(0, 15).map(t =>
         `[${t.name}] 카테고리:${t.category} / 매수조건:${t.entry?.condition} / 트리거:${t.pattern?.trigger}${t.rawInput ? ` / 원문:${t.rawInput}` : ''}`
       ).join('\n');
-      const pastTrades = trades.filter(t => t.id !== selected.id && t.reason).slice(0, 15)
-        .map(t => `${t.stock}(${t.date}, ${t.pnlRate}%): ${t.reason?.slice(0, 80)}`).join('\n');
+      const pastTradesArr = trades.filter(t => t.id !== selected.id && !t.deletedAt && t.reason).slice(0, 15);
+      const pastTrades = pastTradesArr
+        .map(t => `[ID:${t.id}] ${t.stock}(${t.date}, ${t.pnlRate}%): ${t.reason?.slice(0, 80)}`).join('\n');
       const result = await claude("주식 매매 분석 전문가. 핵심만 간결하게.",
-        `[표기 규칙] 매매이유에서 괄호 안 숫자는 만원 단위임. 예: (+50)=+50만원 수익, (1000)=1000만원 매수금액, (-30)=-30만원 손실. "n만원"이라고 쓰지 않고 숫자만 씀.\n\n[현재 매매] 종목:${selected.stock} 날짜:${selected.date} 수익률:${selected.pnlRate}%\n매매이유: ${selected.reason}\n\n[강의록 기법]\n${techSummary || "(없음)"}\n\n[과거 유사 매매 참고]\n${pastTrades || "(없음)"}\n\n아래 항목을 분석:\n1. 강의록 기법 매칭 (적용된 기법과 근거)\n2. 정답매매: 해당 기법 기준 이상적 매매 시나리오 (실제 내가 한 매매가 아닌, 기법대로라면 어떻게 매수/손절/익절해야 했는지). 금액은 같은 표기 규칙으로 괄호 안 숫자(만원)로 표기, 퍼센트 금지\n3. 현재 매매의 잘된 점 / 개선할 점\n4. 과거 유사 매매와 비교`, 2000);
-      setDetailAiAnalysis(result);
-      const similar = trades
-        .filter(t => t.id !== selected.id && !t.deletedAt && matchStock(t.stock, selected.stock))
-        .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
-        .slice(0, 8);
-      setSimilarTrades(similar);
+        `[표기 규칙] 매매이유에서 괄호 안 숫자는 만원 단위임. 예: (+50)=+50만원 수익, (1000)=1000만원 매수금액, (-30)=-30만원 손실. "n만원"이라고 쓰지 않고 숫자만 씀.\n\n[현재 매매] 종목:${selected.stock} 날짜:${selected.date} 수익률:${selected.pnlRate}%\n매매이유: ${selected.reason}\n\n[강의록 기법]\n${techSummary || "(없음)"}\n\n[과거 유사 매매 참고]\n${pastTrades || "(없음)"}\n\n아래 항목을 분석:\n1. 강의록 기법 매칭 (적용된 기법과 근거)\n2. 정답매매: 해당 기법 기준 이상적 매매 시나리오 (실제 내가 한 매매가 아닌, 기법대로라면 어떻게 매수/손절/익절해야 했는지). 금액은 같은 표기 규칙으로 괄호 안 숫자(만원)로 표기, 퍼센트 금지\n3. 현재 매매의 잘된 점 / 개선할 점\n4. 과거 유사 매매와 비교\n\n※ 응답 맨 마지막 줄에 과거 유사 매매 중 가장 유사한 것 최대 5개의 ID를 아래 형식으로만 출력(다른 텍스트 없이): SIMILAR:[id1,id2,...]`, 2200);
+      // 응답 끝에서 SIMILAR:[...] 추출
+      const simMatch = result.match(/SIMILAR:\[([\d,\s]*)\]/);
+      const analysisText = result.replace(/\n?SIMILAR:\[[\d,\s]*\]\s*$/, '').trim();
+      setDetailAiAnalysis(analysisText);
+      if (simMatch) {
+        const ids = simMatch[1].split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+        setSimilarTrades(pastTradesArr.filter(t => ids.includes(t.id)));
+      } else {
+        setSimilarTrades(calcSimilarTrades(selected, trades));
+      }
     } catch (e) { setFeedback(`❌ ${e.message}`); }
     setDetailAiLoading(false);
   };
@@ -1942,7 +1947,7 @@ function JournalTab({ techniques }) {
                 {detailAiAnalysis && <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad", whiteSpace: "pre-wrap", lineHeight: 1.7 }}>{detailAiAnalysis}</div>}
                 {similarTrades.length > 0 && (
                   <div style={{ marginTop: 10, padding: "10px 12px", background: "#12161e", border: "1px solid #2a2d3a", borderRadius: 8 }}>
-                    <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>📎 같은 종목 다른 매매 ({similarTrades.length}건)</div>
+                    <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>📎 AI 선정 유사 매매 ({similarTrades.length}건)</div>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                       {similarTrades.map(t => (
                         <button key={t.id} onClick={() => openDetail(t)}
