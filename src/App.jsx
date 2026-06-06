@@ -859,7 +859,8 @@ function JournalTab({ techniques }) {
 
   const openDetail = async (trade) => {
     window.history.pushState({ ...(window.history.state || {}), journalView: "detail", journalId: trade.id }, "");
-    setSelected(trade); setView("detail"); setFeedback(""); setEditTrade(false); setDetailAiAnalysis(""); setSimilarTrades([]);
+    setSelected(trade); setView("detail"); setFeedback(""); setEditTrade(false); setDetailAiAnalysis("");
+    setSimilarTrades(trade.aiAnalysis ? calcSimilarTrades(trade, trades) : []);
     setDetailImgLoading(true);
     const img = await sbGetChartImg(trade.id);
     setSelected(prev => prev?.id === trade.id ? { ...prev, chartImg: img } : prev);
@@ -876,6 +877,7 @@ function JournalTab({ techniques }) {
         const t = tradesRef.current.find(x => x.id === s.journalId);
         if (t) {
           setSelected(t); setView("detail"); setFeedback(""); setEditTrade(false); setDetailAiAnalysis("");
+          setSimilarTrades(t.aiAnalysis ? calcSimilarTrades(t, tradesRef.current) : []);
           setDetailImgLoading(true);
           sbGetChartImg(t.id).then(img => setSelected(p => p?.id === t.id ? { ...p, chartImg: img } : p)).finally(() => setDetailImgLoading(false));
         }
@@ -1027,6 +1029,12 @@ function JournalTab({ techniques }) {
     return n(a) === n(b) || n(a).includes(n(b)) || n(b).includes(n(a));
   };
 
+  const calcSimilarTrades = (trade, allTrades) =>
+    allTrades
+      .filter(t => t.id !== trade.id && !t.deletedAt && matchStock(t.stock, trade.stock))
+      .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
+      .slice(0, 8);
+
   const fillFormFrom0397 = async (file) => {
     setFill0397Loading(true); setFeedback("");
     try {
@@ -1095,7 +1103,7 @@ function JournalTab({ techniques }) {
       const pastTrades = trades.filter(t => t.id !== selected.id && t.reason).slice(0, 15)
         .map(t => `${t.stock}(${t.date}, ${t.pnlRate}%): ${t.reason?.slice(0, 80)}`).join('\n');
       const result = await claude("주식 매매 분석 전문가. 핵심만 간결하게.",
-        `[현재 매매] 종목:${selected.stock} 날짜:${selected.date} 수익률:${selected.pnlRate}%\n매매이유: ${selected.reason}\n\n[강의록 기법]\n${techSummary || "(없음)"}\n\n[과거 유사 매매]\n${pastTrades || "(없음)"}\n\n아래 항목을 분석:\n1. 강의록 기법 매칭 (적용된 기법)\n2. 과거 유사 매매와 비교\n3. 잘된 점 / 개선할 점`, 2000);
+        `[현재 매매] 종목:${selected.stock} 날짜:${selected.date} 수익률:${selected.pnlRate}%\n매매이유: ${selected.reason}\n\n[강의록 기법]\n${techSummary || "(없음)"}\n\n[과거 유사 매매 참고]\n${pastTrades || "(없음)"}\n\n아래 항목을 분석:\n1. 강의록 기법 매칭 (적용된 기법과 근거)\n2. 정답매매: 해당 기법 기준 이상적 매매 시나리오 (실제 내가 한 매매가 아닌, 기법대로라면 어떻게 매수/손절/익절해야 했는지)\n3. 현재 매매의 잘된 점 / 개선할 점\n4. 과거 유사 매매와 비교`, 2000);
       setDetailAiAnalysis(result);
       const similar = trades
         .filter(t => t.id !== selected.id && !t.deletedAt && matchStock(t.stock, selected.stock))
@@ -1908,7 +1916,7 @@ function JournalTab({ techniques }) {
                       {similarTrades.map(t => (
                         <button key={t.id} onClick={() => openDetail(t)}
                           style={{ padding: "4px 12px", background: "#1a2030", border: `1px solid ${pnlColor(parseFloat(t.pnlRate))}55`, borderRadius: 20, cursor: "pointer", fontSize: 11, color: pnlColor(parseFloat(t.pnlRate)), whiteSpace: "nowrap" }}>
-                          {t.date}&nbsp;&nbsp;{parseFloat(t.pnlRate) > 0 ? "+" : ""}{t.pnlRate}%
+                          {t.date} / {t.stock}
                         </button>
                       ))}
                     </div>
