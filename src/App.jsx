@@ -789,6 +789,7 @@ function JournalTab({ techniques }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [trashSelectMode, setTrashSelectMode] = useState(false);
   const [trashSelectedIds, setTrashSelectedIds] = useState(new Set());
+  const [sortBy, setSortBy] = useState("date_desc");
   const pasteZoneRef = useRef(null);
 
   useEffect(() => {
@@ -799,7 +800,7 @@ function JournalTab({ techniques }) {
 
   const load = useCallback(async () => {
     setLoading(true);
-    try { const rows = await sbGetTrades(); setTrades(rows.map(rowToTrade).sort((a,b) => b.id - a.id)); }
+    try { const rows = await sbGetTrades(); setTrades(rows.map(rowToTrade).sort((a,b) => (b.date||"").localeCompare(a.date||"") || b.id - a.id)); }
     catch (e) { setFeedback(`❌ 로드 실패: ${e.message}`); }
     setLoading(false);
   }, []);
@@ -814,6 +815,18 @@ function JournalTab({ techniques }) {
   useEffect(() => { load(); }, [load]);
 
   const recentStocks = [...new Set(trades.map(t => t.stock).filter(Boolean))].slice(0, 10);
+
+  const sortTrades = (arr) => {
+    const s = [...arr];
+    switch (sortBy) {
+      case "date_asc":     return s.sort((a,b) => (a.date||"").localeCompare(b.date||"") || a.id - b.id);
+      case "pnlRate_desc": return s.sort((a,b) => (parseFloat(b.pnlRate)||0) - (parseFloat(a.pnlRate)||0));
+      case "pnlRate_asc":  return s.sort((a,b) => (parseFloat(a.pnlRate)||0) - (parseFloat(b.pnlRate)||0));
+      case "pnl_desc":     return s.sort((a,b) => (parseFloat(b.pnl)||0) - (parseFloat(a.pnl)||0));
+      case "pnl_asc":      return s.sort((a,b) => (parseFloat(a.pnl)||0) - (parseFloat(b.pnl)||0));
+      default:             return s.sort((a,b) => (b.date||"").localeCompare(a.date||"") || b.id - a.id);
+    }
+  };
 
   const processImage = async (file, mode) => {
     setImgLoading(true); setFeedback("");
@@ -997,8 +1010,8 @@ function JournalTab({ techniques }) {
     if (!selected?.reason) { setFeedback("❌ 매매 이유를 먼저 입력하세요."); return; }
     setDetailAiLoading(true); setDetailAiAnalysis("");
     try {
-      const techSummary = techniques.slice(0, 20).map(t =>
-        `[${t.name}] 카테고리:${t.category} / 매수조건:${t.entry?.condition} / 트리거:${t.pattern?.trigger}`
+      const techSummary = techniques.slice(0, 15).map(t =>
+        `[${t.name}] 카테고리:${t.category} / 매수조건:${t.entry?.condition} / 트리거:${t.pattern?.trigger}${t.rawInput ? ` / 원문:${t.rawInput.slice(0, 200)}` : ''}`
       ).join('\n');
       const pastTrades = trades.filter(t => t.id !== selected.id && t.reason).slice(0, 15)
         .map(t => `${t.stock}(${t.date}, ${t.pnlRate}%): ${t.reason?.slice(0, 80)}`).join('\n');
@@ -1235,6 +1248,17 @@ function JournalTab({ techniques }) {
         )}
         <button onClick={() => setGroupByDate(p => !p)}
           style={{ padding: "4px 10px", background: groupByDate ? "#4f8ef7" : "#2a2d3a", border: "none", color: groupByDate ? "#fff" : "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>📅 날짜별</button>
+        {view === "list" && !selected && listTab !== "trash" && (
+          <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+            style={{ background: "#2a2d3a", border: "1px solid #3a3d4a", color: "#aaa", borderRadius: 5, padding: "4px 8px", fontSize: 12, cursor: "pointer" }}>
+            <option value="date_desc">최근 날짜순 ↓</option>
+            <option value="date_asc">오래된 날짜순 ↑</option>
+            <option value="pnlRate_desc">수익률 높은순 ↓</option>
+            <option value="pnlRate_asc">수익률 낮은순 ↑</option>
+            <option value="pnl_desc">수익금 높은순 ↓</option>
+            <option value="pnl_asc">수익금 낮은순 ↑</option>
+          </select>
+        )}
         <button onClick={load} style={{ marginLeft: "auto", padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>🔄</button>
       </div>
 
@@ -1559,10 +1583,11 @@ function JournalTab({ techniques }) {
       {!loading && view === "list" && !selected && listTab !== "trash" && (() => {
         const isWatch = listTab === "watchlist";
         const filtered = trades.filter(t => isWatch ? t.isWatched : !t.isWatched);
-        if (filtered.length === 0) return <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>{isWatch ? "관심종목 없음" : "매매 기록 없음"}</div>;
+        const sorted = sortTrades(filtered);
+        if (sorted.length === 0) return <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>{isWatch ? "관심종목 없음" : "매매 기록 없음"}</div>;
 
         const toggleSelect = (id) => setSelectedIds(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
-        const allFiltered = filtered;
+        const allFiltered = sorted;
         const allSelected = allFiltered.length > 0 && allFiltered.every(t => selectedIds.has(t.id));
 
         const TradeRow = (t) => {
@@ -1604,9 +1629,9 @@ function JournalTab({ techniques }) {
           </div>
         ) : null;
 
-        if (!groupByDate) return <div style={{ display: "grid", gap: 8 }}>{SelectBar}{filtered.map(TradeRow)}</div>;
-        const grouped = filtered.reduce((acc, t) => { const d = t.date || "날짜없음"; (acc[d] = acc[d] || []).push(t); return acc; }, {});
-        const sortedDates = Object.keys(grouped).sort((a, b) => b.localeCompare(a));
+        if (!groupByDate) return <div style={{ display: "grid", gap: 8 }}>{SelectBar}{sorted.map(TradeRow)}</div>;
+        const grouped = sorted.reduce((acc, t) => { const d = t.date || "날짜없음"; (acc[d] = acc[d] || []).push(t); return acc; }, {});
+        const sortedDates = [...new Set(sorted.map(t => t.date || "날짜없음"))];
         const dayPnl = (ts) => ts.reduce((s, t) => s + (parseFloat(t.pnl) || 0), 0);
         return (
           <div style={{ display: "grid", gap: 4 }}>
@@ -1628,7 +1653,7 @@ function JournalTab({ techniques }) {
       })()}
 
       {!loading && view === "detail" && selected && (() => {
-        const detailFiltered = trades.filter(t => listTab === "watchlist" ? t.isWatched : !t.isWatched);
+        const detailFiltered = sortTrades(trades.filter(t => listTab === "watchlist" ? t.isWatched : !t.isWatched));
         const detailIdx = detailFiltered.findIndex(t => t.id === selected.id);
         return (
         <div>
@@ -1703,7 +1728,22 @@ function JournalTab({ techniques }) {
                     : <div style={{ color: "#555", fontSize: 12, padding: "8px 0" }}>차트 없음</div>
                 }
               </div>
-              {selected.aiAnalysis && <div style={{ marginBottom: 10 }}><div style={label11}>🤖 AI 분석 (저장됨)</div><div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad" }}>{selected.aiAnalysis}</div></div>}
+              {selected.aiAnalysis && (
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                    <span style={label11}>🤖 AI 분석 (저장됨)</span>
+                    <button onClick={async () => {
+                      try {
+                        await sbPatch(selected.id, { ai_analysis: null });
+                        setSelected(p => ({ ...p, aiAnalysis: null }));
+                        setTrades(p => p.map(t => t.id === selected.id ? { ...t, aiAnalysis: null } : t));
+                        setFeedback("✅ AI 분석 삭제됨");
+                      } catch (e) { setFeedback(`❌ ${e.message}`); }
+                    }} style={{ padding: "2px 8px", background: "#3a1a1a", border: "none", color: "#e74c3c", borderRadius: 4, cursor: "pointer", fontSize: 11 }}>삭제</button>
+                  </div>
+                  <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad" }}>{selected.aiAnalysis}</div>
+                </div>
+              )}
               <div style={{ marginTop: 4 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                   <span style={{ fontSize: 12, color: "#8e44ad", fontWeight: 600 }}>🤖 AI 유사 분석</span>
