@@ -972,14 +972,16 @@ function JournalTab({ techniques }) {
       } else {
         const raw = await claude("JSON만 출력.", [
           { type: "image", source: { type: "base64", media_type: mediaType, data: b64 } },
-          { type: "text", text: `키움 [0328] 매매일지에서 JSON 추출. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"date":"YYYY-MM-DD 또는 null","trades":[{"stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}` }
+          { type: "text", text: `키움 [0328] 매매일지에서 JSON 추출. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"date":"YYYY-MM-DD 또는 null","trades":[{"date":"YYYY-MM-DD 또는 null","stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}` }
         ], 3000);
         const p = await parseJSON(raw);
         const tradeList = Array.isArray(p) ? p : (p.trades || []);
         const extractedDate = (!Array.isArray(p) && p.date && p.date !== "null") ? p.date : "";
         if (tradeList.length > 0) {
           const rawRows = tradeList.map(f => ({
-            stock: f.stock || "", buyPrice: f.buyPrice ?? "", sellPrice: f.sellPrice ?? "",
+            stock: f.stock || "",
+            date: (f.date && f.date !== "null") ? f.date : extractedDate,
+            buyPrice: f.buyPrice ?? "", sellPrice: f.sellPrice ?? "",
             pnl: f.pnl ?? "", pnlRate: f.pnlRate ?? "", amount: f.buyAmount ?? "",
           }));
           const merged = autoMergeByStock(rawRows);
@@ -1050,7 +1052,7 @@ function JournalTab({ techniques }) {
     const base = Date.now();
     try {
       const newTrades = pending0397.map((t, i) => ({
-        ...t, date: bulk0397Date, id: base + i,
+        ...t, date: t.date || bulk0397Date, id: base + i,
         createdAt: new Date().toLocaleDateString("ko-KR"),
         chartImg: null, aiAnalysis: "", reason: "", technique: "", memo: "", chartDesc: "",
       }));
@@ -1066,7 +1068,7 @@ function JournalTab({ techniques }) {
     const b64 = await compressImage(file);
     const raw = await claude("JSON만 출력.", [
       { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
-      { type: "text", text: `키움 [0328] 매매일지에서 JSON 추출. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"date":"YYYY-MM-DD 또는 null","trades":[{"stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}` }
+      { type: "text", text: `키움 [0328] 매매일지에서 JSON 추출. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"date":"YYYY-MM-DD 또는 null","trades":[{"date":"YYYY-MM-DD 또는 null","stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}` }
     ], 3000);
     const p = await parseJSON(raw);
     return Array.isArray(p) ? p : (p.trades || []);
@@ -1285,7 +1287,7 @@ function JournalTab({ techniques }) {
   const autoMergeByStock = (rows) => {
     const groups = [];
     rows.forEach(r => {
-      const g = groups.find(g => matchStock(g[0].stock, r.stock));
+      const g = groups.find(g => matchStock(g[0].stock, r.stock) && g[0].date === r.date);
       if (g) g.push(r); else groups.push([r]);
     });
     return groups.map(g => {
@@ -1296,7 +1298,7 @@ function JournalTab({ techniques }) {
         ? g.reduce((s, r) => s + (parseFloat(r[key]) || 0) * (parseFloat(r.amount) || 0), 0) / totalAmt
         : g.reduce((s, r) => s + (parseFloat(r[key]) || 0), 0) / g.length;
       return {
-        stock: g[0].stock,
+        ...g[0],
         buyPrice: Math.round(wavg("buyPrice")),
         sellPrice: Math.round(wavg("sellPrice")),
         pnl: Math.round(totalPnl),
@@ -1652,36 +1654,23 @@ function JournalTab({ techniques }) {
                     style={{ background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "6px 10px", fontSize: 13, colorScheme: "dark" }} />
                 </div>
                 <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
-                  {pending0397.map((t, i) => {
-                    const checked = sel0397.has(i);
-                    return (
-                      <div key={i} onClick={() => setSel0397(p => { const n = new Set(p); n.has(i) ? n.delete(i) : n.add(i); return n; })}
-                        style={{ display: "flex", alignItems: "center", gap: 8, background: checked ? "#1a2a3a" : "#13151f", border: `1px solid ${checked ? "#4f8ef7" : "transparent"}`, borderRadius: 6, padding: "8px 10px", fontSize: 12, cursor: "pointer" }}>
-                        <input type="checkbox" checked={checked} readOnly
-                          style={{ accentColor: "#4f8ef7", width: 14, height: 14, cursor: "pointer" }} />
-                        <span style={{ fontWeight: 600, minWidth: 80, color: "#ddd" }}>{t.stock}</span>
-                        <span style={{ color: "#777" }}>매수 {t.buyPrice}</span>
-                        <span style={{ color: "#777" }}>매도 {t.sellPrice}</span>
-                        <span style={{ marginLeft: "auto", fontWeight: 700, color: pnlColor(parseFloat(t.pnlRate)) }}>
-                          {parseFloat(t.pnlRate) > 0 ? "+" : ""}{t.pnlRate}%
-                        </span>
-                        <button onClick={e => { e.stopPropagation(); setPending0397(p => p.filter((_, j) => j !== i)); setSel0397(p => { const n = new Set(p); n.delete(i); return n; }); }}
-                          style={{ background: "none", border: "none", color: "#e74c3c", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "0 2px" }}>✕</button>
-                      </div>
-                    );
-                  })}
+                  {pending0397.map((t, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, background: "#13151f", borderRadius: 6, padding: "8px 10px", fontSize: 12 }}>
+                      <span style={{ fontWeight: 600, minWidth: 80, color: "#ddd" }}>{t.stock}</span>
+                      {t.date && <span style={{ fontSize: 11, color: "#555" }}>{t.date}</span>}
+                      <span style={{ color: "#777" }}>매수 {t.buyPrice}</span>
+                      <span style={{ color: "#777" }}>매도 {t.sellPrice}</span>
+                      <span style={{ marginLeft: "auto", fontWeight: 700, color: pnlColor(parseFloat(t.pnlRate)) }}>
+                        {parseFloat(t.pnlRate) > 0 ? "+" : ""}{t.pnlRate}%
+                      </span>
+                      <button onClick={() => setPending0397(p => p.filter((_, j) => j !== i))}
+                        style={{ background: "none", border: "none", color: "#e74c3c", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "0 2px" }}>✕</button>
+                    </div>
+                  ))}
                 </div>
                 <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                   <button onClick={handleBulkSave0397} style={{ padding: "8px 20px", background: "#4f8ef7", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>전체 저장</button>
-                  {sel0397.size >= 2 && (
-                    <button onClick={mergePending} style={{ padding: "8px 16px", background: "#27ae60", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>
-                      선택 머지 ({sel0397.size}건 → 1건)
-                    </button>
-                  )}
-                  {sel0397.size > 0 && (
-                    <button onClick={() => setSel0397(new Set())} style={{ padding: "8px 10px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>선택 해제</button>
-                  )}
-                  <button onClick={() => { setPending0397([]); setSel0397(new Set()); }} style={{ padding: "8px 14px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>취소</button>
+                  <button onClick={() => setPending0397([])} style={{ padding: "8px 14px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>취소</button>
                   {feedback && <span style={{ fontSize: 13, color: feedback.startsWith("✅") ? "#4caf50" : "#e74c3c" }}>{feedback}</span>}
                 </div>
               </div>
@@ -2053,7 +2042,7 @@ function JournalTab({ techniques }) {
                   const b64 = await compressImage(files[0]);
                   const raw = await claude("JSON만 출력.", [
                     { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
-                    { type: "text", text: `키움 [0328] 매매일지에서 JSON 추출. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"date":"YYYY-MM-DD 또는 null","trades":[{"stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}` }
+                    { type: "text", text: `키움 [0328] 매매일지에서 JSON 추출. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"date":"YYYY-MM-DD 또는 null","trades":[{"date":"YYYY-MM-DD 또는 null","stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}` }
                   ], 3000);
                   const p = await parseJSON(raw);
                   const tl = Array.isArray(p) ? p : (p.trades || []);
