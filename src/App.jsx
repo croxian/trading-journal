@@ -151,8 +151,9 @@ const filterKakaoText = (raw) => {
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].trim();
     if (/^\[용\]/.test(trimmed)) {
-      const next = (lines[i + 1] || '').trim();
-      if (next !== '사진') kept.push(trimmed);
+      // [용] 제거 후 타임스탬프([오전 9:45] 등)도 제거한 실제 내용
+      const content = trimmed.replace(/^\[용\]/, '').replace(/^\s*\[[^\]]+\]/, '').trim();
+      if (content !== '사진') kept.push(trimmed);
     }
   }
   return kept.join('\n');
