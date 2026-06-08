@@ -31,7 +31,7 @@ const sbPatch = async (id, data) => {
   if (!r.ok) throw new Error(await r.text());
 };
 const sbGetLiveTrades = async () => {
-  const r = await fetch(`${SB_URL}/rest/v1/live_trades?select=*&deleted_at=is.null&order=id.asc`, { headers: HDR });
+  const r = await fetch(`${SB_URL}/rest/v1/live_trades?select=*&deleted_at=is.null&order=id.desc`, { headers: HDR });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 };
@@ -2203,7 +2203,7 @@ function RealTradeTab() {
     setLoading(true);
     try {
       const rows = await sbGetLiveTrades();
-      setLTrades(rows.map(rowToLiveTrade).sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.id - a.id));
+      setLTrades(rows.map(rowToLiveTrade).sort((a, b) => b.id - a.id));
     } catch (e) { setFeedback(`❌ 로드 실패: ${e.message}`); }
     setLoading(false);
   }, []);
