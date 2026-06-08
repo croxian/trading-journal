@@ -184,9 +184,16 @@ const parseJSON = async (text) => {
   const m = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
   if (!m) throw new Error("JSON 없음");
   try { return JSON.parse(m[0]); } catch {}
-  const fixed = m[0].replace(/:\s*"([\s\S]*?)(?<!\\)"(?=\s*[,}\]])/g, (_, v) =>
-    `: "${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "").replace(/\t/g, "\\t")}"`);
-  return JSON.parse(fixed);
+  try {
+    const fixed = m[0].replace(/:\s*"([\s\S]*?)(?<!\\)"(?=\s*[,}\]])/g, (_, v) =>
+      `: "${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "").replace(/\t/g, "\\t")}"`);
+    return JSON.parse(fixed);
+  } catch {}
+  try {
+    const cleaned = m[0].replace(/,\s*([}\]])/g, "$1").replace(/([{,]\s*)(\w+):/g, '$1"$2":');
+    return JSON.parse(cleaned);
+  } catch {}
+  throw new Error("AI 응답 파싱 실패. 이미지를 다시 붙여넣어 주세요.");
 };
 const toBase64 = (file) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = () => rej(new Error("파일 읽기 실패")); r.readAsDataURL(file); });
 
@@ -965,8 +972,8 @@ function JournalTab({ techniques }) {
       } else {
         const raw = await claude("JSON만 출력.", [
           { type: "image", source: { type: "base64", media_type: mediaType, data: b64 } },
-          { type: "text", text: `키움 [0397] 매매일지에서 JSON 추출:\n{"date":"YYYY-MM-DD 또는 null","trades":[{"stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}` }
-        ], 1200);
+          { type: "text", text: `키움 [0328] 매매일지에서 JSON 추출. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"date":"YYYY-MM-DD 또는 null","trades":[{"stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}` }
+        ], 3000);
         const p = await parseJSON(raw);
         const tradeList = Array.isArray(p) ? p : (p.trades || []);
         const extractedDate = (!Array.isArray(p) && p.date && p.date !== "null") ? p.date : "";
@@ -1056,8 +1063,8 @@ function JournalTab({ techniques }) {
     const b64 = await compressImage(file);
     const raw = await claude("JSON만 출력.", [
       { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
-      { type: "text", text: `키움 [0397] 매매일지에서 JSON 추출:\n{"date":"YYYY-MM-DD 또는 null","trades":[{"stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}` }
-    ], 1200);
+      { type: "text", text: `키움 [0328] 매매일지에서 JSON 추출. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"date":"YYYY-MM-DD 또는 null","trades":[{"stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}` }
+    ], 3000);
     const p = await parseJSON(raw);
     return Array.isArray(p) ? p : (p.trades || []);
   };
@@ -1484,7 +1491,7 @@ function JournalTab({ techniques }) {
       {!loading && view === "add" && (
         <div>
           <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-            {[["img0606","📈 [0606]"], ["img0397","📋 [0397]"], ["ppt","📊 PPT"], ["manual","✏️ 직접입력"]].map(([m, label]) => (
+            {[["img0606","📈 [0606]"], ["img0397","📋 [0328]"], ["ppt","📊 PPT"], ["manual","✏️ 직접입력"]].map(([m, label]) => (
               <button key={m} onClick={() => { setInputMode(m); setPending0397([]); setPendingPpt([]); setFeedback(""); }}
                 style={{ padding: "6px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, background: inputMode === m ? "#4f8ef7" : "#2a2d3a", color: inputMode === m ? "#fff" : "#aaa" }}>{label}</button>
             ))}
@@ -1500,7 +1507,7 @@ function JournalTab({ techniques }) {
             >
               <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                 <label style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "8px 16px", background: "#2a2d3a", border: "1px dashed #4f8ef7", borderRadius: 8, cursor: "pointer", fontSize: 13, color: "#aaa" }}>
-                  📎 {inputMode === "img0606" ? "[0606] 차트 이미지" : "[0397] 매매내역 이미지"}
+                  📎 {inputMode === "img0606" ? "[0606] 차트 이미지" : "[0328] 매매내역 이미지"}
                   <input type="file" accept="image/*" style={{ display: "none" }} onChange={e => handleImageExtract(e, inputMode === "img0606" ? "0606" : "0397")} />
                 </label>
                 <span style={{ fontSize: 12, color: "#555" }}>또는 Ctrl+V 붙여넣기</span>
@@ -1589,7 +1596,7 @@ function JournalTab({ techniques }) {
                     </div>
                     <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
                       <label style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 12px", background: "#2a2d3a", border: "1px solid #3a3d4a", borderRadius: 5, cursor: "pointer", fontSize: 12, color: "#aaa" }}>
-                        📋 0397 이미지 매칭
+                        📋 0328 이미지 매칭
                         <input type="file" accept="image/*" style={{ display: "none" }} onChange={async e => { const f = e.target.files[0]; if (f) { await fillPptFrom0397(f); e.target.value = ""; } }} />
                       </label>
                       <label style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 12px", background: "#2a2d3a", border: "1px solid #3a3d4a", borderRadius: 5, cursor: "pointer", fontSize: 12, color: "#aaa" }}>
@@ -1685,9 +1692,9 @@ function JournalTab({ techniques }) {
                     style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box", colorScheme: "dark" }} />
                 </div>
                 <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 8, padding: "6px 0 2px" }}>
-                  <span style={{ fontSize: 11, color: "#555" }}>재무 데이터 (직접 입력 또는 0397로 채우기)</span>
+                  <span style={{ fontSize: 11, color: "#555" }}>재무 데이터 (직접 입력 또는 0328로 채우기)</span>
                   <label style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 10px", background: "#2a2d3a", border: "1px solid #3a3d4a", borderRadius: 5, cursor: "pointer", fontSize: 11, color: "#aaa" }}>
-                    📋 0397 이미지
+                    📋 0328 이미지
                     <input type="file" accept="image/*" style={{ display: "none" }}
                       onChange={async e => { const f = e.target.files[0]; if (f) { await fillFormFrom0397(f); e.target.value = ""; } }} />
                   </label>
@@ -2017,8 +2024,8 @@ function JournalTab({ techniques }) {
                   const b64 = await compressImage(files[0]);
                   const raw = await claude("JSON만 출력.", [
                     { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
-                    { type: "text", text: `키움 [0397] 매매일지에서 JSON 추출:\n{"date":"YYYY-MM-DD 또는 null","trades":[{"stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}` }
-                  ], 1200);
+                    { type: "text", text: `키움 [0328] 매매일지에서 JSON 추출. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"date":"YYYY-MM-DD 또는 null","trades":[{"stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}` }
+                  ], 3000);
                   const p = await parseJSON(raw);
                   const tl = Array.isArray(p) ? p : (p.trades || []);
                   const matches = editForm?.stock ? tl.filter(t => matchStock(t.stock, editForm.stock)) : [];
@@ -2033,7 +2040,7 @@ function JournalTab({ techniques }) {
               <div style={{ marginBottom: 12 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                   <span style={{ fontSize: 11, color: "#555" }}>Ctrl+V 붙여넣기 모드:</span>
-                  {[["0606","📈 0606 차트"], ["0397","📋 0397 재무"]].map(([m, lbl]) => (
+                  {[["0606","📈 0606 차트"], ["0397","📋 0328 재무"]].map(([m, lbl]) => (
                     <button key={m} onClick={() => setEditPasteMode(m)}
                       style={{ padding: "3px 10px", borderRadius: 5, border: "none", cursor: "pointer", fontSize: 11, background: editPasteMode === m ? "#4f8ef7" : "#2a2d3a", color: editPasteMode === m ? "#fff" : "#aaa" }}>{lbl}</button>
                   ))}
@@ -2044,7 +2051,7 @@ function JournalTab({ techniques }) {
                     📎 [0606] 이미지 <input type="file" accept="image/*" style={{ display: "none" }} onChange={async e => { const f = e.target.files[0]; if (f) { await handleEditImageExtract(f); e.target.value = ""; } }} />
                   </label>
                   <label style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 12px", background: "#2a2d3a", border: "1px dashed #3a3d4a", borderRadius: 6, cursor: "pointer", fontSize: 12, color: "#aaa" }}>
-                    📋 [0397] 이미지 <input type="file" accept="image/*" style={{ display: "none" }} onChange={async e => {
+                    📋 [0328] 이미지 <input type="file" accept="image/*" style={{ display: "none" }} onChange={async e => {
                       const f = e.target.files[0]; if (!f) return;
                       setEditImgLoading(true); setFeedback("");
                       try {
