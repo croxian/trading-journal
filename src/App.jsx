@@ -2191,6 +2191,7 @@ function RealTradeTab() {
   const [similarTrades, setSimilarTrades] = useState([]);
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
   const [imgIdx, setImgIdx] = useState(0);
+  const [imgScale, setImgScale] = useState(1);
   const [contentTab, setContentTab] = useState("summary");
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [aiSummary, setAiSummary] = useState("");
@@ -2224,7 +2225,7 @@ function RealTradeTab() {
   const openDetail = (trade) => {
     setSelected(trade); setView("detail"); setFeedback(""); setEditTrade(false);
     setAiAnalysis(""); setSimilarTrades(trade.aiAnalysis ? calcSimilar(trade, lTrades) : []);
-    setImgIdx(0); setContentTab("summary"); setAiSummary("");
+    setImgIdx(0); setImgScale(1); setContentTab("summary"); setAiSummary("");
   };
 
   const generateSummary = async () => {
@@ -2234,7 +2235,7 @@ function RealTradeTab() {
       const result = await claude(
         "주식 실전매매 메시지 요약 전문가. 핵심 내용을 2-3문장으로 간결하게 요약.",
         `다음 실전매매 카카오톡 메시지를 요약해주세요:\n\n${selected.textContent}`,
-        400
+        800
       );
       setAiSummary(result.trim());
     } catch (e) { setFeedback(`❌ ${e.message}`); }
@@ -2455,71 +2456,78 @@ function RealTradeTab() {
                   )}
                 </div>
 
-                {/* 2-컬럼: 좌=슬라이드쇼, 우=요약+내용 */}
-                <div style={{ display: "grid", gridTemplateColumns: isMobile || !selected.images?.length ? "1fr" : "2fr 3fr", gap: 16, marginBottom: 16, alignItems: "start" }}>
-                  {/* 좌: 이미지 슬라이드쇼 */}
-                  {selected.images?.length > 0 && (
-                    <div style={{ position: "relative", background: "#0f1117", borderRadius: 8, overflow: "hidden" }}>
-                      <img src={`data:image/jpeg;base64,${selected.images[Math.min(imgIdx, selected.images.length - 1)]}`} alt="chart"
-                        style={{ width: "100%", display: "block", borderRadius: 8 }} />
-                      {selected.images.length > 1 && (
-                        <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 8px", background: "rgba(0,0,0,0.55)" }}>
-                          <button onClick={() => setImgIdx(p => Math.max(0, p - 1))} disabled={imgIdx === 0}
-                            style={{ background: imgIdx > 0 ? "rgba(255,255,255,0.15)" : "transparent", border: "none", color: imgIdx > 0 ? "#fff" : "#555", borderRadius: 4, padding: "2px 10px", cursor: imgIdx > 0 ? "pointer" : "default", fontSize: 16 }}>◀</button>
-                          <span style={{ fontSize: 12, color: "#ccc" }}>{imgIdx + 1} / {selected.images.length}</span>
-                          <button onClick={() => setImgIdx(p => Math.min(selected.images.length - 1, p + 1))} disabled={imgIdx >= selected.images.length - 1}
-                            style={{ background: imgIdx < selected.images.length - 1 ? "rgba(255,255,255,0.15)" : "transparent", border: "none", color: imgIdx < selected.images.length - 1 ? "#fff" : "#555", borderRadius: 4, padding: "2px 10px", cursor: imgIdx < selected.images.length - 1 ? "pointer" : "default", fontSize: 16 }}>▶</button>
+                {/* 슬라이드쇼 — 고정 높이, 이미지 가운데 */}
+                {selected.images?.length > 0 && (
+                  <div style={{ position: "relative", background: "#0f1117", borderRadius: 8, overflow: "hidden", height: 340, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 14 }}>
+                    <img
+                      key={imgIdx}
+                      src={`data:image/jpeg;base64,${selected.images[Math.min(imgIdx, selected.images.length - 1)]}`}
+                      alt="chart"
+                      onLoad={e => {
+                        const { naturalWidth: w, naturalHeight: h } = e.target;
+                        setImgScale(w < 400 && h < 300 ? 2 : 1);
+                      }}
+                      style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", transform: imgScale > 1 ? `scale(${imgScale})` : "none", transition: "transform 0.2s" }}
+                    />
+                    {selected.images.length > 1 && (
+                      <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "rgba(0,0,0,0.6)" }}>
+                        <button onClick={() => { setImgIdx(p => Math.max(0, p - 1)); setImgScale(1); }} disabled={imgIdx === 0}
+                          style={{ background: "none", border: "none", color: imgIdx > 0 ? "#fff" : "#444", cursor: imgIdx > 0 ? "pointer" : "default", fontSize: 18, padding: "0 8px" }}>◀</button>
+                        <span style={{ fontSize: 12, color: "#ccc" }}>{imgIdx + 1} / {selected.images.length}</span>
+                        <button onClick={() => { setImgIdx(p => Math.min(selected.images.length - 1, p + 1)); setImgScale(1); }} disabled={imgIdx >= selected.images.length - 1}
+                          style={{ background: "none", border: "none", color: imgIdx < selected.images.length - 1 ? "#fff" : "#444", cursor: imgIdx < selected.images.length - 1 ? "pointer" : "default", fontSize: 18, padding: "0 8px" }}>▶</button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 요약/전체 탭 */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+                    {[["summary", "요약"], ["full", "전체"]].map(([key, label]) => (
+                      <button key={key} onClick={() => setContentTab(key)}
+                        style={{ padding: "4px 14px", borderRadius: 5, border: "none", cursor: "pointer", fontSize: 12, background: contentTab === key ? "#e74c3c" : "#2a2d3a", color: contentTab === key ? "#fff" : "#aaa" }}>{label}</button>
+                    ))}
+                  </div>
+
+                  {contentTab === "summary" && (
+                    <div>
+                      {selected.summary ? (
+                        <div>
+                          <div style={val14}>{selected.summary}</div>
+                          <button onClick={async () => {
+                            try {
+                              await sbPatchLive(selected.id, { summary: null });
+                              const updated = { ...selected, summary: null };
+                              setSelected(updated); setLTrades(p => p.map(t => t.id === selected.id ? updated : t));
+                            } catch (e) { setFeedback(`❌ ${e.message}`); }
+                          }} style={{ marginTop: 6, padding: "2px 8px", background: "#3a1a1a", border: "none", color: "#e74c3c", borderRadius: 4, cursor: "pointer", fontSize: 11 }}>삭제</button>
+                        </div>
+                      ) : aiSummary ? (
+                        <div>
+                          <div style={val14}>{aiSummary}</div>
+                          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                            <button onClick={saveSummary} style={{ padding: "4px 12px", background: "#4f8ef7", color: "#fff", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>💾 저장</button>
+                            <button onClick={() => setAiSummary("")} style={{ padding: "4px 10px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>초기화</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          <button onClick={generateSummary} disabled={summaryLoading}
+                            style={{ padding: "8px 18px", background: summaryLoading ? "#333" : "#e74c3c", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13, alignSelf: "flex-start" }}>
+                            {summaryLoading ? "생성 중..." : "🤖 AI 요약 생성"}
+                          </button>
+                          <div style={{ fontSize: 12, color: "#555" }}>텍스트 내용을 AI로 요약합니다.</div>
                         </div>
                       )}
                     </div>
                   )}
 
-                  {/* 우: 요약/전체 탭 */}
-                  <div>
-                    <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-                      {[["summary", "요약"], ["full", "전체"]].map(([key, label]) => (
-                        <button key={key} onClick={() => setContentTab(key)}
-                          style={{ padding: "4px 14px", borderRadius: 5, border: "none", cursor: "pointer", fontSize: 12, background: contentTab === key ? "#e74c3c" : "#2a2d3a", color: contentTab === key ? "#fff" : "#aaa" }}>{label}</button>
-                      ))}
+                  {contentTab === "full" && (
+                    <div style={{ ...val14, maxHeight: "224px", overflowY: "auto" }}>
+                      {selected.textContent || <span style={{ color: "#555" }}>내용 없음</span>}
                     </div>
-
-                    {contentTab === "summary" && (
-                      <div>
-                        {selected.summary ? (
-                          <div>
-                            <div style={val14}>{selected.summary}</div>
-                            <button onClick={async () => {
-                              try {
-                                await sbPatchLive(selected.id, { summary: null });
-                                const updated = { ...selected, summary: null };
-                                setSelected(updated); setLTrades(p => p.map(t => t.id === selected.id ? updated : t));
-                              } catch (e) { setFeedback(`❌ ${e.message}`); }
-                            }} style={{ marginTop: 6, padding: "2px 8px", background: "#3a1a1a", border: "none", color: "#e74c3c", borderRadius: 4, cursor: "pointer", fontSize: 11 }}>삭제</button>
-                          </div>
-                        ) : aiSummary ? (
-                          <div>
-                            <div style={val14}>{aiSummary}</div>
-                            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                              <button onClick={saveSummary} style={{ padding: "4px 12px", background: "#4f8ef7", color: "#fff", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>💾 저장</button>
-                              <button onClick={() => setAiSummary("")} style={{ padding: "4px 10px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>초기화</button>
-                            </div>
-                          </div>
-                        ) : (
-                          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                            <button onClick={generateSummary} disabled={summaryLoading}
-                              style={{ padding: "8px 18px", background: summaryLoading ? "#333" : "#e74c3c", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13, alignSelf: "flex-start" }}>
-                              {summaryLoading ? "생성 중..." : "🤖 AI 요약 생성"}
-                            </button>
-                            <div style={{ fontSize: 12, color: "#555" }}>텍스트 내용을 AI로 요약합니다.</div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {contentTab === "full" && (
-                      <div style={val14}>{selected.textContent || <span style={{ color: "#555" }}>내용 없음</span>}</div>
-                    )}
-                  </div>
+                  )}
                 </div>
 
                 {/* AI 분석 섹션 */}
