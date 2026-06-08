@@ -2458,7 +2458,7 @@ function RealTradeTab() {
 
                 {/* 슬라이드쇼 — 고정 높이, 이미지 가운데 */}
                 {selected.images?.length > 0 && (
-                  <div style={{ position: "relative", background: "#0f1117", borderRadius: 8, overflow: "hidden", height: 340, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 14 }}>
+                  <div style={{ position: "relative", background: "#0f1117", borderRadius: 8, overflow: "hidden", height: 500, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 14 }}>
                     <img
                       key={imgIdx}
                       src={`data:image/jpeg;base64,${selected.images[Math.min(imgIdx, selected.images.length - 1)]}`}
