@@ -2203,7 +2203,7 @@ function RealTradeTab() {
     setLoading(true);
     try {
       const rows = await sbGetLiveTrades();
-      setLTrades(rows.map(rowToLiveTrade).sort((a, b) => b.id - a.id));
+      setLTrades(rows.map(rowToLiveTrade).sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.id - a.id));
     } catch (e) { setFeedback(`❌ 로드 실패: ${e.message}`); }
     setLoading(false);
   }, []);
