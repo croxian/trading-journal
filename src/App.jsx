@@ -964,8 +964,8 @@ function JournalTab({ techniques }) {
         setChartImg(b64);
         const raw = await claude("JSON만 출력.", [
           { type: "image", source: { type: "base64", media_type: mediaType, data: b64 } },
-          { type: "text", text: `키움 [0606] 자동일지차트에서 JSON 추출:\n{"stock":"종목명","date":"YYYY-MM-DD","buyPrice":매수가숫자,"sellPrice":매도가숫자,"pnlRate":수익률숫자,"chartDescription":"차트패턴설명"}\n확인불가는 null.` }
-        ], 1000);
+          { type: "text", text: `키움 [0606] 자동일지차트에서 JSON 추출. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"stock":"종목명","date":"YYYY-MM-DD","buyPrice":매수가숫자,"sellPrice":매도가숫자,"pnlRate":수익률숫자,"chartDescription":"차트패턴설명"}\n확인불가는 null.` }
+        ], 1500);
         const p = await parseJSON(raw);
         setForm(f => ({ ...f, stock: p.stock || "", date: p.date || "", buyPrice: p.buyPrice || "", sellPrice: p.sellPrice || "", pnlRate: p.pnlRate || "", chartDesc: p.chartDescription || "" }));
         setFeedback("✅ 차트 정보 추출 완료");
@@ -1216,10 +1216,10 @@ function JournalTab({ techniques }) {
         }
         const content = [
           ...compressed.map(b64 => ({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } })),
-          { type: "text", text: `슬라이드 텍스트:\n${texts || "(없음)"}\n\n이미지 중 키움증권 주식 차트(분봉/일봉)를 찾아 JSON 추출:\n{"chart_index":이미지번호(0부터,없으면null),"stock":"종목명","date":"YYYY-MM-DD","reason":"매매이유(불릿 포함 그대로)"}` }
+          { type: "text", text: `슬라이드 텍스트:\n${texts || "(없음)"}\n\n이미지 중 키움증권 주식 차트(분봉/일봉)를 찾아 컴팩트 JSON(줄바꿈 없이)으로 추출:\n{"chart_index":이미지번호(0부터,없으면null),"stock":"종목명","date":"YYYY-MM-DD","reason":"매매이유(불릿 포함 그대로)"}` }
         ];
         try {
-          const raw = await claude("JSON만 출력.", content, 1500);
+          const raw = await claude("JSON만 출력.", content, 2000);
           const p = await parseJSON(raw);
           const chartImg = (p.chart_index != null && compressed[p.chart_index]) ? compressed[p.chart_index] : null;
           if (!p.stock && !p.reason && !chartImg) continue; // 차트·텍스트 둘 다 인식 못하면 삭제
