@@ -64,6 +64,7 @@ const liveTradeToRow = (t) => ({
   text_content: t.textContent,
   images: JSON.stringify(t.images || []),
   ai_analysis: t.aiAnalysis || null,
+  summary: t.summary || null,
   created_at: t.createdAt,
   deleted_at: t.deletedAt || null,
 });
@@ -72,6 +73,7 @@ const rowToLiveTrade = (r) => ({
   textContent: r.text_content,
   images: (() => { try { return JSON.parse(r.images || "[]"); } catch { return []; } })(),
   aiAnalysis: r.ai_analysis,
+  summary: r.summary || null,
   createdAt: r.created_at,
   deletedAt: r.deleted_at || null,
 });
@@ -2134,6 +2136,46 @@ function JournalTab({ techniques }) {
   );
 }
 
+// ==================== 이미지 그리드 (드래그 순서변경) ====================
+function ImgGrid({ images, onRemove, onReorder }) {
+  const [dragIdx, setDragIdx] = useState(null);
+  const [dragOverIdx, setDragOverIdx] = useState(null);
+  if (!images?.length) return null;
+
+  const handleDrop = (i) => {
+    if (dragIdx === null || dragIdx === i) { setDragIdx(null); setDragOverIdx(null); return; }
+    const arr = [...images];
+    const [item] = arr.splice(dragIdx, 1);
+    arr.splice(i, 0, item);
+    onReorder?.(arr);
+    try { navigator.vibrate?.(20); } catch {}
+    setDragIdx(null); setDragOverIdx(null);
+  };
+
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+      {images.map((b64, i) => (
+        <div key={i}
+          draggable={!!onReorder}
+          onDragStart={() => { setDragIdx(i); try { navigator.vibrate?.(10); } catch {}; }}
+          onDragOver={e => { e.preventDefault(); setDragOverIdx(i); }}
+          onDragLeave={() => setDragOverIdx(null)}
+          onDrop={() => handleDrop(i)}
+          onDragEnd={() => { setDragIdx(null); setDragOverIdx(null); }}
+          style={{ position: "relative", opacity: dragIdx === i ? 0.4 : 1, outline: dragOverIdx === i && dragIdx !== i ? "2px solid #4f8ef7" : "none", borderRadius: 8, cursor: onReorder ? "grab" : "default", transition: "opacity 0.15s" }}>
+          <img src={`data:image/jpeg;base64,${b64}`} alt={`img${i}`}
+            style={{ width: 100, height: 80, objectFit: "cover", borderRadius: 6, border: "1px solid #2a2d3a", display: "block", pointerEvents: "none" }} />
+          {onRemove && (
+            <button onClick={() => onRemove(i)}
+              style={{ position: "absolute", top: 2, right: 2, background: "#e74c3c", border: "none", color: "#fff", borderRadius: "50%", width: 18, height: 18, cursor: "pointer", fontSize: 10, padding: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+          )}
+          {onReorder && <div style={{ position: "absolute", bottom: 2, left: 0, right: 0, textAlign: "center", fontSize: 11, color: "#555", pointerEvents: "none" }}>⠿</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ==================== 실전매매 탭 ====================
 function RealTradeTab() {
   const [lTrades, setLTrades] = useState([]);
@@ -2148,6 +2190,10 @@ function RealTradeTab() {
   const [aiLoading, setAiLoading] = useState(false);
   const [similarTrades, setSimilarTrades] = useState([]);
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+  const [imgIdx, setImgIdx] = useState(0);
+  const [contentTab, setContentTab] = useState("summary");
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [aiSummary, setAiSummary] = useState("");
   const imgPasteRef = useRef(null);
   const editImgPasteRef = useRef(null);
   const isMobile = useIsMobile();
@@ -2178,6 +2224,30 @@ function RealTradeTab() {
   const openDetail = (trade) => {
     setSelected(trade); setView("detail"); setFeedback(""); setEditTrade(false);
     setAiAnalysis(""); setSimilarTrades(trade.aiAnalysis ? calcSimilar(trade, lTrades) : []);
+    setImgIdx(0); setContentTab("summary"); setAiSummary("");
+  };
+
+  const generateSummary = async () => {
+    if (!selected?.textContent) { setFeedback("❌ 내용이 없습니다."); return; }
+    setSummaryLoading(true);
+    try {
+      const result = await claude(
+        "주식 실전매매 메시지 요약 전문가. 핵심 내용을 2-3문장으로 간결하게 요약.",
+        `다음 실전매매 카카오톡 메시지를 요약해주세요:\n\n${selected.textContent}`,
+        400
+      );
+      setAiSummary(result.trim());
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+    setSummaryLoading(false);
+  };
+
+  const saveSummary = async () => {
+    try {
+      await sbPatchLive(selected.id, { summary: aiSummary });
+      const updated = { ...selected, summary: aiSummary };
+      setSelected(updated); setLTrades(p => p.map(t => t.id === selected.id ? updated : t));
+      setAiSummary(""); setFeedback("✅ 요약 저장됨");
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
 
   const handleAddImage = async (file, target) => {
@@ -2254,21 +2324,6 @@ function RealTradeTab() {
 
   const iStyle = { width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box" };
 
-  const ImgGrid = ({ images, onRemove }) => images?.length > 0 ? (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
-      {images.map((b64, i) => (
-        <div key={i} style={{ position: "relative" }}>
-          <img src={`data:image/jpeg;base64,${b64}`} alt={`img${i}`}
-            style={{ width: 100, height: 80, objectFit: "cover", borderRadius: 6, border: "1px solid #2a2d3a" }} />
-          {onRemove && (
-            <button onClick={() => onRemove(i)}
-              style={{ position: "absolute", top: 2, right: 2, background: "#e74c3c", border: "none", color: "#fff", borderRadius: "50%", width: 18, height: 18, cursor: "pointer", fontSize: 10, padding: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
-          )}
-        </div>
-      ))}
-    </div>
-  ) : null;
-
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center" }}>
@@ -2334,7 +2389,9 @@ function RealTradeTab() {
               </label>
               {form.images.length > 0 && <span style={{ fontSize: 12, color: "#555" }}>{form.images.length}장</span>}
             </div>
-            <ImgGrid images={form.images} onRemove={i => setForm(f => ({ ...f, images: f.images.filter((_, j) => j !== i) }))} />
+            <ImgGrid images={form.images}
+              onRemove={i => setForm(f => ({ ...f, images: f.images.filter((_, j) => j !== i) }))}
+              onReorder={arr => setForm(f => ({ ...f, images: arr }))} />
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <button onClick={handleSave} style={{ padding: "8px 20px", background: "#e74c3c", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>저장</button>
@@ -2381,6 +2438,7 @@ function RealTradeTab() {
 
             {!editTrade ? (
               <div style={box}>
+                {/* 헤더: 종목/날짜/수정/삭제 */}
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
                   <span style={{ fontSize: 18, fontWeight: 700 }}>{selected.stock}</span>
                   <span style={{ fontSize: 13, color: "#666" }}>{selected.date}</span>
@@ -2396,23 +2454,75 @@ function RealTradeTab() {
                     <button onClick={() => setDeleteConfirmId(selected.id)} style={{ padding: "4px 10px", background: "#3a1a1a", border: "none", color: "#e74c3c", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>🗑️ 삭제</button>
                   )}
                 </div>
-                {selected.textContent && (
-                  <div style={{ marginBottom: 14 }}>
-                    <div style={label11}>내용</div>
-                    <div style={val14}>{selected.textContent}</div>
-                  </div>
-                )}
-                {selected.images?.length > 0 && (
-                  <div style={{ marginBottom: 14 }}>
-                    <div style={label11}>차트 이미지 ({selected.images.length}장)</div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                      {selected.images.map((b64, i) => (
-                        <img key={i} src={`data:image/jpeg;base64,${b64}`} alt={`chart${i}`}
-                          style={{ maxWidth: "100%", borderRadius: 6, border: "1px solid #2a2d3a" }} />
+
+                {/* 2-컬럼: 좌=슬라이드쇼, 우=요약+내용 */}
+                <div style={{ display: "grid", gridTemplateColumns: isMobile || !selected.images?.length ? "1fr" : "2fr 3fr", gap: 16, marginBottom: 16, alignItems: "start" }}>
+                  {/* 좌: 이미지 슬라이드쇼 */}
+                  {selected.images?.length > 0 && (
+                    <div style={{ position: "relative", background: "#0f1117", borderRadius: 8, overflow: "hidden" }}>
+                      <img src={`data:image/jpeg;base64,${selected.images[Math.min(imgIdx, selected.images.length - 1)]}`} alt="chart"
+                        style={{ width: "100%", display: "block", borderRadius: 8 }} />
+                      {selected.images.length > 1 && (
+                        <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 8px", background: "rgba(0,0,0,0.55)" }}>
+                          <button onClick={() => setImgIdx(p => Math.max(0, p - 1))} disabled={imgIdx === 0}
+                            style={{ background: imgIdx > 0 ? "rgba(255,255,255,0.15)" : "transparent", border: "none", color: imgIdx > 0 ? "#fff" : "#555", borderRadius: 4, padding: "2px 10px", cursor: imgIdx > 0 ? "pointer" : "default", fontSize: 16 }}>◀</button>
+                          <span style={{ fontSize: 12, color: "#ccc" }}>{imgIdx + 1} / {selected.images.length}</span>
+                          <button onClick={() => setImgIdx(p => Math.min(selected.images.length - 1, p + 1))} disabled={imgIdx >= selected.images.length - 1}
+                            style={{ background: imgIdx < selected.images.length - 1 ? "rgba(255,255,255,0.15)" : "transparent", border: "none", color: imgIdx < selected.images.length - 1 ? "#fff" : "#555", borderRadius: 4, padding: "2px 10px", cursor: imgIdx < selected.images.length - 1 ? "pointer" : "default", fontSize: 16 }}>▶</button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 우: 요약/전체 탭 */}
+                  <div>
+                    <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+                      {[["summary", "요약"], ["full", "전체"]].map(([key, label]) => (
+                        <button key={key} onClick={() => setContentTab(key)}
+                          style={{ padding: "4px 14px", borderRadius: 5, border: "none", cursor: "pointer", fontSize: 12, background: contentTab === key ? "#e74c3c" : "#2a2d3a", color: contentTab === key ? "#fff" : "#aaa" }}>{label}</button>
                       ))}
                     </div>
+
+                    {contentTab === "summary" && (
+                      <div>
+                        {selected.summary ? (
+                          <div>
+                            <div style={val14}>{selected.summary}</div>
+                            <button onClick={async () => {
+                              try {
+                                await sbPatchLive(selected.id, { summary: null });
+                                const updated = { ...selected, summary: null };
+                                setSelected(updated); setLTrades(p => p.map(t => t.id === selected.id ? updated : t));
+                              } catch (e) { setFeedback(`❌ ${e.message}`); }
+                            }} style={{ marginTop: 6, padding: "2px 8px", background: "#3a1a1a", border: "none", color: "#e74c3c", borderRadius: 4, cursor: "pointer", fontSize: 11 }}>삭제</button>
+                          </div>
+                        ) : aiSummary ? (
+                          <div>
+                            <div style={val14}>{aiSummary}</div>
+                            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                              <button onClick={saveSummary} style={{ padding: "4px 12px", background: "#4f8ef7", color: "#fff", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>💾 저장</button>
+                              <button onClick={() => setAiSummary("")} style={{ padding: "4px 10px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>초기화</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                            <button onClick={generateSummary} disabled={summaryLoading}
+                              style={{ padding: "8px 18px", background: summaryLoading ? "#333" : "#e74c3c", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13, alignSelf: "flex-start" }}>
+                              {summaryLoading ? "생성 중..." : "🤖 AI 요약 생성"}
+                            </button>
+                            <div style={{ fontSize: 12, color: "#555" }}>텍스트 내용을 AI로 요약합니다.</div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {contentTab === "full" && (
+                      <div style={val14}>{selected.textContent || <span style={{ color: "#555" }}>내용 없음</span>}</div>
+                    )}
                   </div>
-                )}
+                </div>
+
+                {/* AI 분석 섹션 */}
                 {selected.aiAnalysis && (
                   <div style={{ marginBottom: 10 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
@@ -2513,7 +2623,9 @@ function RealTradeTab() {
                     style={{ padding: "6px 12px", background: "#2a2d3a", border: "1px dashed #3a3d4a", borderRadius: 6, color: "#555", fontSize: 12, cursor: "pointer", outline: "none", marginBottom: 8 }}>
                     🖼️ Ctrl+V로 이미지 추가
                   </div>
-                  <ImgGrid images={editForm.images} onRemove={i => setEditForm(f => ({ ...f, images: f.images.filter((_, j) => j !== i) }))} />
+                  <ImgGrid images={editForm.images}
+                    onRemove={i => setEditForm(f => ({ ...f, images: f.images.filter((_, j) => j !== i) }))}
+                    onReorder={arr => setEditForm(f => ({ ...f, images: arr }))} />
                 </div>
                 <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                   <button onClick={handleEditSave} style={{ padding: "8px 20px", background: "#e74c3c", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>저장</button>
