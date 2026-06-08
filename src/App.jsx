@@ -862,7 +862,6 @@ function JournalTab({ techniques }) {
   const [editForm, setEditForm] = useState(null);
   const [editImgLoading, setEditImgLoading] = useState(false);
   const [sel0397, setSel0397] = useState(new Set());
-  const [selPpt, setSelPpt] = useState(new Set());
   const [pendingPpt, setPendingPpt] = useState([]);
   const [pptLoading, setPptLoading] = useState(false);
   const [pptProgress, setPptProgress] = useState("");
@@ -979,12 +978,15 @@ function JournalTab({ techniques }) {
         const tradeList = Array.isArray(p) ? p : (p.trades || []);
         const extractedDate = (!Array.isArray(p) && p.date && p.date !== "null") ? p.date : "";
         if (tradeList.length > 0) {
-          setPending0397(tradeList.map(f => ({
+          const rawRows = tradeList.map(f => ({
             stock: f.stock || "", buyPrice: f.buyPrice ?? "", sellPrice: f.sellPrice ?? "",
             pnl: f.pnl ?? "", pnlRate: f.pnlRate ?? "", amount: f.buyAmount ?? "",
-          })));
+          }));
+          const merged = autoMergeByStock(rawRows);
+          setPending0397(merged);
           setBulk0397Date(extractedDate || new Date().toISOString().slice(0, 10));
-          setFeedback(`✅ ${tradeList.length}개 종목 추출 완료`);
+          const mergeNote = merged.length < rawRows.length ? ` (${rawRows.length}행 → ${merged.length}종목 자동 머지)` : "";
+          setFeedback(`✅ ${merged.length}개 종목 추출 완료${mergeNote}`);
         } else {
           setFeedback("❌ 추출된 종목 없음");
         }
@@ -1280,6 +1282,32 @@ function JournalTab({ techniques }) {
     setEditImgLoading(false);
   };
 
+  const autoMergeByStock = (rows) => {
+    const groups = [];
+    rows.forEach(r => {
+      const g = groups.find(g => matchStock(g[0].stock, r.stock));
+      if (g) g.push(r); else groups.push([r]);
+    });
+    return groups.map(g => {
+      if (g.length === 1) return g[0];
+      const totalAmt = g.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+      const totalPnl = g.reduce((s, r) => s + (parseFloat(r.pnl) || 0), 0);
+      const wavg = (key) => totalAmt > 0
+        ? g.reduce((s, r) => s + (parseFloat(r[key]) || 0) * (parseFloat(r.amount) || 0), 0) / totalAmt
+        : g.reduce((s, r) => s + (parseFloat(r[key]) || 0), 0) / g.length;
+      return {
+        stock: g[0].stock,
+        buyPrice: Math.round(wavg("buyPrice")),
+        sellPrice: Math.round(wavg("sellPrice")),
+        pnl: Math.round(totalPnl),
+        pnlRate: totalAmt > 0
+          ? parseFloat((totalPnl / totalAmt * 100).toFixed(2))
+          : parseFloat((g.reduce((s, r) => s + (parseFloat(r.pnlRate) || 0), 0) / g.length).toFixed(2)),
+        amount: Math.round(totalAmt),
+      };
+    });
+  };
+
   const mergePending = () => {
     if (sel0397.size < 2) return;
     const idxs = [...sel0397].sort((a, b) => a - b);
@@ -1303,37 +1331,6 @@ function JournalTab({ techniques }) {
     if (!inserted) next.push(merged);
     setPending0397(next);
     setSel0397(new Set());
-  };
-
-  const mergePptPending = () => {
-    if (selPpt.size < 2) return;
-    const idxs = [...selPpt].sort((a, b) => a - b);
-    const rows = idxs.map(i => pendingPpt[i]);
-    const totalAmt = rows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
-    const totalPnl = rows.reduce((s, r) => s + (parseFloat(r.pnl) || 0), 0);
-    const wavg = (key) => totalAmt > 0
-      ? rows.reduce((s, r) => s + (parseFloat(r[key]) || 0) * (parseFloat(r.amount) || 0), 0) / totalAmt
-      : rows.reduce((s, r) => s + (parseFloat(r[key]) || 0), 0) / rows.length;
-    const merged = {
-      ...rows[0],
-      reason: rows.map(r => r.reason).filter(Boolean).join('\n'),
-      buyPrice: totalAmt > 0 ? Math.round(wavg("buyPrice")) : rows[0].buyPrice,
-      sellPrice: totalAmt > 0 ? Math.round(wavg("sellPrice")) : rows[0].sellPrice,
-      amount: Math.round(totalAmt),
-      pnl: Math.round(totalPnl),
-      pnlRate: totalAmt > 0
-        ? parseFloat((totalPnl / totalAmt * 100).toFixed(2))
-        : parseFloat((rows.reduce((s, r) => s + (parseFloat(r.pnlRate) || 0), 0) / rows.length).toFixed(2)),
-    };
-    const next = [];
-    let inserted = false;
-    pendingPpt.forEach((r, i) => {
-      if (i === idxs[0] && !inserted) { next.push(merged); inserted = true; }
-      if (!selPpt.has(i)) next.push(r);
-    });
-    if (!inserted) next.push(merged);
-    setPendingPpt(next);
-    setSelPpt(new Set());
   };
 
   const handleEditSave = async () => {
@@ -1578,13 +1575,9 @@ function JournalTab({ techniques }) {
                         const i = pendingPpt.indexOf(t);
                         const isWatched = t.isTraded === false;
                         return (
-                          <div key={i} style={{ ...box, border: `1px solid ${selPpt.has(i) ? "#27ae60" : isWatched ? "#555" : "#2a2d3a"}`, opacity: isWatched ? 0.75 : 1, position: "relative" }}>
+                          <div key={i} style={{ ...box, border: `1px solid ${isWatched ? "#555" : "#2a2d3a"}`, opacity: isWatched ? 0.75 : 1, position: "relative" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                              <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 12 }} onClick={e => e.stopPropagation()}>
-                                <input type="checkbox" checked={selPpt.has(i)} onChange={() => setSelPpt(p => { const n = new Set(p); n.has(i) ? n.delete(i) : n.add(i); return n; })} style={{ accentColor: "#27ae60" }} />
-                                <span style={{ color: selPpt.has(i) ? "#27ae60" : "#555", fontSize: 11 }}>머지선택</span>
-                              </label>
-                              <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", fontSize: 12, marginLeft: 6 }}>
+                              <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", fontSize: 12 }}>
                                 <input type="checkbox" checked={!isWatched} onChange={e => upd(i, { isTraded: e.target.checked })} style={{ accentColor: "#4f8ef7" }} />
                                 <span style={{ color: isWatched ? "#777" : "#aaa" }}>{isWatched ? "관심종목" : "실제매매"}</span>
                               </label>
@@ -1641,17 +1634,9 @@ function JournalTab({ techniques }) {
                       </label>
                       {fill0397Loading && <span style={{ fontSize: 12, color: "#aaa" }}>⏳</span>}
                     </div>
-                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                       <button onClick={handleBulkSavePpt} style={{ padding: "8px 20px", background: "#4f8ef7", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>실제매매 저장</button>
-                      {selPpt.size >= 2 && (
-                        <button onClick={mergePptPending} style={{ padding: "8px 16px", background: "#27ae60", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>
-                          선택 머지 ({selPpt.size}건 → 1건)
-                        </button>
-                      )}
-                      {selPpt.size > 0 && (
-                        <button onClick={() => setSelPpt(new Set())} style={{ padding: "8px 10px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>선택 해제</button>
-                      )}
-                      <button onClick={() => { setPendingPpt([]); setPptFilter("all"); setFeedback(""); setSelPpt(new Set()); }} style={{ padding: "8px 14px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>취소</button>
+                      <button onClick={() => { setPendingPpt([]); setPptFilter("all"); setFeedback(""); }} style={{ padding: "8px 14px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>취소</button>
                     </div>
                   </div>
                 );
