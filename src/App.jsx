@@ -3,7 +3,7 @@ import JSZip from "jszip";
 import * as XLSX from "xlsx";
 
 // ==================== 상수 / 설정 ====================
-const TABS = ["🏠 대시보드", "📝 매매일지", "📊 통계", "📚 강의록"];
+const TABS = ["🏠 대시보드", "📝 매매일지", "📊 통계", "📚 강의록", "🔴 실전매매"];
 const SB_URL = "https://vbdtrynddjryxcpgpisf.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZiZHRyeW5kZGpyeXhjcGdwaXNmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0MDI0MDEsImV4cCI6MjA5NTk3ODQwMX0.p3Bs8i-sNz6GodYIXLg1BzdrTxAc9-jB2dZRaOKCW3M";
 const HDR = { "Content-Type": "application/json", "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Prefer": "resolution=merge-duplicates" };
@@ -30,6 +30,16 @@ const sbPatch = async (id, data) => {
   const r = await fetch(`${SB_URL}/rest/v1/trades?id=eq.${id}`, { method: "PATCH", headers: HDR2, body: JSON.stringify(data) });
   if (!r.ok) throw new Error(await r.text());
 };
+const sbGetLiveTrades = async () => {
+  const r = await fetch(`${SB_URL}/rest/v1/live_trades?select=*&deleted_at=is.null&order=id.asc`, { headers: HDR });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+};
+const sbPatchLive = async (id, data) => {
+  const HDR2 = { ...HDR, Prefer: "return=minimal" };
+  const r = await fetch(`${SB_URL}/rest/v1/live_trades?id=eq.${id}`, { method: "PATCH", headers: HDR2, body: JSON.stringify(data) });
+  if (!r.ok) throw new Error(await r.text());
+};
 const sbDeleteOld = async (before) => {
   const r = await fetch(`${SB_URL}/rest/v1/trades?deleted_at=lt.${before}`, { method: "DELETE", headers: HDR });
   if (!r.ok) throw new Error(await r.text());
@@ -49,6 +59,22 @@ const sbDelete = async (table, id) => {
   if (!r.ok) throw new Error(await r.text());
 };
 
+const liveTradeToRow = (t) => ({
+  id: t.id, stock: t.stock, date: t.date,
+  text_content: t.textContent,
+  images: JSON.stringify(t.images || []),
+  ai_analysis: t.aiAnalysis || null,
+  created_at: t.createdAt,
+  deleted_at: t.deletedAt || null,
+});
+const rowToLiveTrade = (r) => ({
+  id: r.id, stock: r.stock, date: r.date,
+  textContent: r.text_content,
+  images: (() => { try { return JSON.parse(r.images || "[]"); } catch { return []; } })(),
+  aiAnalysis: r.ai_analysis,
+  createdAt: r.created_at,
+  deletedAt: r.deleted_at || null,
+});
 const techToRow = (t) => ({ id: t.id, name: t.name, category: t.category, timeframe: t.timeframe, entry: t.entry, exit: t.exit, pattern: t.pattern, tags: t.tags, notes: t.notes, raw_input: t.rawInput, created_at: t.createdAt });
 const rowToTech = (r) => ({ id: r.id, name: r.name, category: r.category, timeframe: r.timeframe, entry: r.entry, exit: r.exit, pattern: r.pattern, tags: r.tags, notes: r.notes, rawInput: r.raw_input, createdAt: r.created_at });
 const tradeToRow = (t) => ({ id: t.id, stock: t.stock, date: t.date, buy_price: t.buyPrice, sell_price: t.sellPrice, amount: t.amount, pnl: t.pnl, pnl_rate: t.pnlRate, reason: t.reason, technique: t.technique, memo: t.memo, chart_img: t.chartImg, ai_analysis: t.aiAnalysis, chart_desc: t.chartDesc, created_at: t.createdAt, is_watched: t.isWatched === true });
@@ -117,6 +143,19 @@ const fmtNum = (v) => {
   if (s === "-") return "-";
   const n = parseFloat(s);
   return isNaN(n) ? "" : Math.round(n).toLocaleString("ko-KR");
+};
+
+const filterKakaoText = (raw) => {
+  const lines = raw.split('\n');
+  const kept = [];
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (/^\[용\]/.test(trimmed)) {
+      const next = (lines[i + 1] || '').trim();
+      if (next !== '사진') kept.push(trimmed);
+    }
+  }
+  return kept.join('\n');
 };
 
 const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_KEY || "";
@@ -2094,6 +2133,389 @@ function JournalTab({ techniques }) {
   );
 }
 
+// ==================== 실전매매 탭 ====================
+function RealTradeTab() {
+  const [lTrades, setLTrades] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [view, setView] = useState("list");
+  const [form, setForm] = useState({ stock: "", date: "", textContent: "", images: [] });
+  const [feedback, setFeedback] = useState("");
+  const [selected, setSelected] = useState(null);
+  const [editForm, setEditForm] = useState(null);
+  const [editTrade, setEditTrade] = useState(false);
+  const [aiAnalysis, setAiAnalysis] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [similarTrades, setSimilarTrades] = useState([]);
+  const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+  const imgPasteRef = useRef(null);
+  const editImgPasteRef = useRef(null);
+  const isMobile = useIsMobile();
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const rows = await sbGetLiveTrades();
+      setLTrades(rows.map(rowToLiveTrade).sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.id - a.id));
+    } catch (e) { setFeedback(`❌ 로드 실패: ${e.message}`); }
+    setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const calcSimilar = (trade, all) => {
+    const src = trade.textContent || "";
+    if (!src) return [];
+    const tokens = [...new Set(src.split(/[\s,./!?()\[\]「」『』【】]+/).filter(w => w.length >= 2))];
+    return all
+      .filter(t => t.id !== trade.id)
+      .map(t => ({ t, score: tokens.reduce((s, w) => s + ((t.textContent || "").includes(w) ? 1 : 0), 0) }))
+      .filter(({ score }) => score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5)
+      .map(({ t }) => t);
+  };
+
+  const openDetail = (trade) => {
+    setSelected(trade); setView("detail"); setFeedback(""); setEditTrade(false);
+    setAiAnalysis(""); setSimilarTrades(trade.aiAnalysis ? calcSimilar(trade, lTrades) : []);
+  };
+
+  const handleAddImage = async (file, target) => {
+    try {
+      const b64 = await compressImage(file);
+      if (target === "form") setForm(f => ({ ...f, images: [...f.images, b64] }));
+      else setEditForm(f => ({ ...f, images: [...(f.images || []), b64] }));
+    } catch (e) { setFeedback(`❌ 이미지 오류: ${e.message}`); }
+  };
+
+  const handlePasteImg = (e, target) => {
+    const files = [];
+    if (e.clipboardData?.items) {
+      for (const item of Array.from(e.clipboardData.items)) {
+        if (item.type.startsWith("image/")) { const f = item.getAsFile(); if (f) files.push(f); }
+      }
+    }
+    if (files.length === 0) return;
+    e.preventDefault();
+    files.forEach(f => handleAddImage(f, target));
+  };
+
+  const handleSave = async () => {
+    if (!form.stock) { setFeedback("❌ 종목명은 필수입니다."); return; }
+    const trade = { ...form, id: Date.now(), createdAt: new Date().toLocaleDateString("ko-KR"), aiAnalysis: "" };
+    try {
+      await sbUpsert("live_trades", [liveTradeToRow(trade)]);
+      setLTrades(p => [trade, ...p]);
+      setForm({ stock: "", date: "", textContent: "", images: [] });
+      setFeedback("✅ 저장됨"); setView("list");
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+  };
+
+  const handleEditSave = async () => {
+    if (!editForm.stock) { setFeedback("❌ 종목명은 필수입니다."); return; }
+    try {
+      await sbUpsert("live_trades", [liveTradeToRow(editForm)]);
+      setLTrades(p => p.map(t => t.id === editForm.id ? editForm : t));
+      setSelected(editForm); setEditTrade(false); setFeedback("✅ 수정됨");
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+  };
+
+  const handleDelete = async (id) => {
+    try {
+      await sbDelete("live_trades", id);
+      setLTrades(p => p.filter(t => t.id !== id));
+      setSelected(null); setDeleteConfirmId(null); setView("list");
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+  };
+
+  const analyzeDetail = async () => {
+    if (!selected?.textContent) { setFeedback("❌ 내용이 없습니다."); return; }
+    setAiLoading(true); setAiAnalysis("");
+    try {
+      const pastArr = lTrades.filter(t => t.id !== selected.id && t.textContent).slice(0, 10);
+      const pastText = pastArr.map(t => `[ID:${t.id}] ${t.stock}(${t.date}): ${(t.textContent || "").slice(0, 80)}`).join('\n');
+      const result = await claude(
+        "주식 실전매매 분석 전문가. 카카오톡 매매 메시지를 분석하여 핵심 매매 패턴과 의도를 파악한다.",
+        `[현재 실전매매]\n종목:${selected.stock} 날짜:${selected.date}\n내용:\n${selected.textContent}\n\n[과거 실전매매 참고]\n${pastText || "(없음)"}\n\n아래 항목을 분석:\n1. 매매 의도 및 전략\n2. 핵심 판단 근거\n3. 과거 유사 매매와 비교\n\n※ 응답 맨 마지막 줄에 과거 유사 매매 중 가장 유사한 것 최대 5개의 ID를 아래 형식으로만 출력(다른 텍스트 없이): SIMILAR:[id1,id2,...]`,
+        2000
+      );
+      const simMatch = result.match(/SIMILAR:\[([\d,\s]*)\]/);
+      const analysisText = result.replace(/\n?SIMILAR:\[[\d,\s]*\]\s*$/, '').trim();
+      setAiAnalysis(analysisText);
+      if (simMatch) {
+        const ids = simMatch[1].split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+        setSimilarTrades(pastArr.filter(t => ids.includes(t.id)));
+      } else {
+        setSimilarTrades(calcSimilar(selected, lTrades));
+      }
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+    setAiLoading(false);
+  };
+
+  const iStyle = { width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box" };
+
+  const ImgGrid = ({ images, onRemove }) => images?.length > 0 ? (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+      {images.map((b64, i) => (
+        <div key={i} style={{ position: "relative" }}>
+          <img src={`data:image/jpeg;base64,${b64}`} alt={`img${i}`}
+            style={{ width: 100, height: 80, objectFit: "cover", borderRadius: 6, border: "1px solid #2a2d3a" }} />
+          {onRemove && (
+            <button onClick={() => onRemove(i)}
+              style={{ position: "absolute", top: 2, right: 2, background: "#e74c3c", border: "none", color: "#fff", borderRadius: "50%", width: 18, height: 18, cursor: "pointer", fontSize: 10, padding: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+          )}
+        </div>
+      ))}
+    </div>
+  ) : null;
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center" }}>
+        <button onClick={() => { setView("list"); setSelected(null); setFeedback(""); }}
+          style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: view === "list" && !selected ? "#e74c3c" : "#2a2d3a", color: view === "list" && !selected ? "#fff" : "#aaa" }}>
+          📋 목록 ({lTrades.length})
+        </button>
+        <button onClick={() => { setView("add"); setSelected(null); setFeedback(""); setForm({ stock: "", date: "", textContent: "", images: [] }); }}
+          style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: view === "add" ? "#e74c3c" : "#2a2d3a", color: view === "add" ? "#fff" : "#aaa" }}>
+          추가
+        </button>
+        <button onClick={load} style={{ marginLeft: "auto", padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>🔄</button>
+      </div>
+
+      {loading && <div style={{ color: "#555", padding: 40, textAlign: "center" }}>로딩 중...</div>}
+
+      {!loading && view === "add" && (
+        <div style={box}>
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10, marginBottom: 12 }}>
+            <div>
+              <div style={label11}>종목명 *</div>
+              <input value={form.stock} onChange={e => setForm(f => ({ ...f, stock: e.target.value }))} placeholder="종목명" style={iStyle} />
+            </div>
+            <div>
+              <div style={label11}>날짜</div>
+              <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} style={{ ...iStyle, colorScheme: "dark" }} />
+            </div>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <div style={label11}>카카오톡 내용 (Ctrl+V — [용]으로 시작하는 메시지만 자동 추출)</div>
+            <textarea
+              value={form.textContent}
+              onChange={e => setForm(f => ({ ...f, textContent: e.target.value }))}
+              onPaste={e => {
+                const text = e.clipboardData?.getData("text");
+                if (text) {
+                  e.preventDefault();
+                  const filtered = filterKakaoText(text);
+                  if (filtered) setForm(f => ({ ...f, textContent: f.textContent ? f.textContent + "\n" + filtered : filtered }));
+                }
+              }}
+              placeholder="카카오톡 채팅 내용을 붙여넣으세요 (Ctrl+V)..."
+              style={{ ...iStyle, minHeight: 120, resize: "vertical", lineHeight: 1.6, textAlign: "left" }}
+            />
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <div style={label11}>차트 이미지 (Ctrl+V 또는 파일선택 — 복수 가능)</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <div ref={imgPasteRef} tabIndex={0} onPaste={e => handlePasteImg(e, "form")} onClick={() => imgPasteRef.current?.focus()}
+                style={{ padding: "7px 14px", background: "#2a2d3a", border: "1px dashed #4f8ef7", borderRadius: 8, cursor: "pointer", fontSize: 12, color: "#aaa", outline: "none" }}>
+                🖼️ Ctrl+V로 이미지 붙여넣기
+              </div>
+              <label style={{ padding: "7px 14px", background: "#2a2d3a", border: "1px solid #3a3d4a", borderRadius: 8, cursor: "pointer", fontSize: 12, color: "#aaa" }}>
+                📎 파일 선택
+                <input type="file" accept="image/*" multiple style={{ display: "none" }}
+                  onChange={e => { Array.from(e.target.files).forEach(f => handleAddImage(f, "form")); e.target.value = ""; }} />
+              </label>
+              {form.images.length > 0 && <span style={{ fontSize: 12, color: "#555" }}>{form.images.length}장</span>}
+            </div>
+            <ImgGrid images={form.images} onRemove={i => setForm(f => ({ ...f, images: f.images.filter((_, j) => j !== i) }))} />
+          </div>
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <button onClick={handleSave} style={{ padding: "8px 20px", background: "#e74c3c", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>저장</button>
+            {feedback && <span style={{ fontSize: 13, color: feedback.startsWith("✅") ? "#4caf50" : "#e74c3c" }}>{feedback}</span>}
+          </div>
+        </div>
+      )}
+
+      {!loading && view === "list" && !selected && (
+        lTrades.length === 0
+          ? <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>실전매매 기록 없음</div>
+          : <div style={{ display: "grid", gap: 8 }}>
+            {lTrades.map(t => (
+              <div key={t.id} onClick={() => openDetail(t)}
+                style={{ ...box, cursor: "pointer" }}
+                onMouseEnter={e => e.currentTarget.style.borderColor = "#e74c3c"}
+                onMouseLeave={e => e.currentTarget.style.borderColor = "#2a2d3a"}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontWeight: 700 }}>{t.stock}</span>
+                  <span style={{ fontSize: 12, color: "#666" }}>{t.date}</span>
+                  {t.images?.length > 0 && <span style={{ fontSize: 11, color: "#555" }}>🖼️ {t.images.length}장</span>}
+                  {t.aiAnalysis && <span style={{ fontSize: 11, color: "#8e44ad" }}>🤖</span>}
+                </div>
+                {t.textContent && <div style={{ marginTop: 5, fontSize: 12, color: "#666", textAlign: "left" }}>{t.textContent.slice(0, 80)}{t.textContent.length > 80 ? "..." : ""}</div>}
+              </div>
+            ))}
+          </div>
+      )}
+
+      {!loading && view === "detail" && selected && (() => {
+        const idx = lTrades.findIndex(t => t.id === selected.id);
+        return (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+              <button onClick={() => { setView("list"); setSelected(null); setFeedback(""); setAiAnalysis(""); setSimilarTrades([]); }}
+                style={{ background: "none", border: "none", color: "#e74c3c", cursor: "pointer", fontSize: 13 }}>← 목록</button>
+              <span style={{ flex: 1 }} />
+              <button onClick={() => idx > 0 && openDetail(lTrades[idx - 1])} disabled={idx <= 0}
+                style={{ padding: "3px 10px", background: idx > 0 ? "#2a2d3a" : "#1a1d27", border: "none", color: idx > 0 ? "#aaa" : "#444", borderRadius: 5, cursor: idx > 0 ? "pointer" : "default", fontSize: 12 }}>◀ 이전</button>
+              <span style={{ fontSize: 12, color: "#555" }}>{idx + 1} / {lTrades.length}</span>
+              <button onClick={() => idx < lTrades.length - 1 && openDetail(lTrades[idx + 1])} disabled={idx >= lTrades.length - 1}
+                style={{ padding: "3px 10px", background: idx < lTrades.length - 1 ? "#2a2d3a" : "#1a1d27", border: "none", color: idx < lTrades.length - 1 ? "#aaa" : "#444", borderRadius: 5, cursor: idx < lTrades.length - 1 ? "pointer" : "default", fontSize: 12 }}>다음 ▶</button>
+            </div>
+
+            {!editTrade ? (
+              <div style={box}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 18, fontWeight: 700 }}>{selected.stock}</span>
+                  <span style={{ fontSize: 13, color: "#666" }}>{selected.date}</span>
+                  <button onClick={() => { setEditForm({ ...selected }); setEditTrade(true); setFeedback(""); setDeleteConfirmId(null); }}
+                    style={{ marginLeft: "auto", padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>수정</button>
+                  {deleteConfirmId === selected.id ? (
+                    <>
+                      <span style={{ fontSize: 12, color: "#e74c3c" }}>삭제하시겠습니까?</span>
+                      <button onClick={() => handleDelete(selected.id)} style={{ padding: "4px 10px", background: "#e74c3c", color: "#fff", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>확인</button>
+                      <button onClick={() => setDeleteConfirmId(null)} style={{ padding: "4px 10px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>취소</button>
+                    </>
+                  ) : (
+                    <button onClick={() => setDeleteConfirmId(selected.id)} style={{ padding: "4px 10px", background: "#3a1a1a", border: "none", color: "#e74c3c", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>🗑️ 삭제</button>
+                  )}
+                </div>
+                {selected.textContent && (
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={label11}>내용</div>
+                    <div style={val14}>{selected.textContent}</div>
+                  </div>
+                )}
+                {selected.images?.length > 0 && (
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={label11}>차트 이미지 ({selected.images.length}장)</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                      {selected.images.map((b64, i) => (
+                        <img key={i} src={`data:image/jpeg;base64,${b64}`} alt={`chart${i}`}
+                          style={{ maxWidth: "100%", borderRadius: 6, border: "1px solid #2a2d3a" }} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {selected.aiAnalysis && (
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                      <span style={label11}>🤖 AI 분석 (저장됨)</span>
+                      <button onClick={async () => {
+                        try {
+                          await sbPatchLive(selected.id, { ai_analysis: null });
+                          const updated = { ...selected, aiAnalysis: null };
+                          setSelected(updated); setLTrades(p => p.map(t => t.id === selected.id ? updated : t));
+                          setFeedback("✅ AI 분석 삭제됨");
+                        } catch (e) { setFeedback(`❌ ${e.message}`); }
+                      }} style={{ padding: "2px 8px", background: "#3a1a1a", border: "none", color: "#e74c3c", borderRadius: 4, cursor: "pointer", fontSize: 11 }}>삭제</button>
+                    </div>
+                    <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad" }}>{selected.aiAnalysis}</div>
+                  </div>
+                )}
+                <div style={{ marginTop: 4 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                    <span style={{ fontSize: 12, color: "#8e44ad", fontWeight: 600 }}>🤖 AI 분석</span>
+                    <button onClick={analyzeDetail} disabled={aiLoading}
+                      style={{ padding: "3px 12px", background: aiLoading ? "#333" : "#8e44ad", color: "#fff", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>
+                      {aiLoading ? "분석 중..." : aiAnalysis ? "재분석" : "분석 시작"}
+                    </button>
+                    {aiAnalysis && <button onClick={() => setAiAnalysis("")} style={{ padding: "3px 10px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 11 }}>초기화</button>}
+                    {aiAnalysis && (
+                      <button onClick={async () => {
+                        try {
+                          await sbPatchLive(selected.id, { ai_analysis: aiAnalysis });
+                          const updated = { ...selected, aiAnalysis };
+                          setSelected(updated); setLTrades(p => p.map(t => t.id === selected.id ? updated : t));
+                          setFeedback("✅ AI 분석 저장됨");
+                        } catch (e) { setFeedback(`❌ ${e.message}`); }
+                      }} style={{ padding: "3px 12px", background: "#4f8ef7", color: "#fff", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 11 }}>💾 저장</button>
+                    )}
+                  </div>
+                  {aiAnalysis && <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad", whiteSpace: "pre-wrap", lineHeight: 1.7 }}>{aiAnalysis}</div>}
+                  {similarTrades.length > 0 && (
+                    <div style={{ marginTop: 10, padding: "10px 12px", background: "#12161e", border: "1px solid #2a2d3a", borderRadius: 8 }}>
+                      <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>📎 AI 선정 유사 실전매매 ({similarTrades.length}건)</div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {similarTrades.map(t => (
+                          <button key={t.id} onClick={() => openDetail(t)}
+                            style={{ padding: "4px 12px", background: "#1a2030", border: "1px solid #2a2d3a", borderRadius: 20, cursor: "pointer", fontSize: 11, color: "#aaa", whiteSpace: "nowrap" }}>
+                            {t.date} / {t.stock}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {feedback && <div style={{ marginTop: 8, fontSize: 13, color: feedback.startsWith("✅") ? "#4caf50" : "#e74c3c" }}>{feedback}</div>}
+              </div>
+            ) : (
+              <div style={box}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: "#aaa", marginBottom: 10 }}>수정 중: {selected.stock}</div>
+                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10, marginBottom: 12 }}>
+                  <div>
+                    <div style={label11}>종목명 *</div>
+                    <input value={editForm.stock || ""} onChange={e => setEditForm(f => ({ ...f, stock: e.target.value }))} style={iStyle} />
+                  </div>
+                  <div>
+                    <div style={label11}>날짜</div>
+                    <input type="date" value={editForm.date || ""} onChange={e => setEditForm(f => ({ ...f, date: e.target.value }))} style={{ ...iStyle, colorScheme: "dark" }} />
+                  </div>
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <div style={label11}>내용 (Ctrl+V로 카카오톡 추가 가능)</div>
+                  <textarea
+                    value={editForm.textContent || ""}
+                    onChange={e => setEditForm(f => ({ ...f, textContent: e.target.value }))}
+                    onPaste={e => {
+                      const text = e.clipboardData?.getData("text");
+                      if (text) {
+                        e.preventDefault();
+                        const filtered = filterKakaoText(text);
+                        if (filtered) setEditForm(f => ({ ...f, textContent: f.textContent ? f.textContent + "\n" + filtered : filtered }));
+                      }
+                    }}
+                    style={{ ...iStyle, minHeight: 120, resize: "vertical", lineHeight: 1.6, textAlign: "left" }}
+                  />
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                    <div style={label11}>차트 이미지</div>
+                    <label style={{ fontSize: 12, color: "#4f8ef7", cursor: "pointer" }}>
+                      + 파일추가
+                      <input type="file" accept="image/*" multiple style={{ display: "none" }}
+                        onChange={e => { Array.from(e.target.files).forEach(f => handleAddImage(f, "edit")); e.target.value = ""; }} />
+                    </label>
+                  </div>
+                  <div ref={editImgPasteRef} tabIndex={0} onPaste={e => handlePasteImg(e, "edit")} onClick={() => editImgPasteRef.current?.focus()}
+                    style={{ padding: "6px 12px", background: "#2a2d3a", border: "1px dashed #3a3d4a", borderRadius: 6, color: "#555", fontSize: 12, cursor: "pointer", outline: "none", marginBottom: 8 }}>
+                    🖼️ Ctrl+V로 이미지 추가
+                  </div>
+                  <ImgGrid images={editForm.images} onRemove={i => setEditForm(f => ({ ...f, images: f.images.filter((_, j) => j !== i) }))} />
+                </div>
+                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <button onClick={handleEditSave} style={{ padding: "8px 20px", background: "#e74c3c", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>저장</button>
+                  <button onClick={() => { setEditTrade(false); setFeedback(""); }} style={{ padding: "8px 14px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>취소</button>
+                  {feedback && <span style={{ fontSize: 13, color: feedback.startsWith("✅") ? "#4caf50" : "#e74c3c" }}>{feedback}</span>}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
 // ==================== 통계 탭 ====================
 function StatsTab() {
   const [trades, setTrades] = useState([]);
@@ -2228,6 +2650,7 @@ export default function App() {
         {activeTab === 1 && <JournalTab techniques={techniques} />}
         {activeTab === 2 && <StatsTab />}
         {activeTab === 3 && <LectureTab />}
+        {activeTab === 4 && <RealTradeTab />}
       </div>
     </div>
   );
