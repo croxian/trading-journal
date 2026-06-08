@@ -2276,7 +2276,7 @@ function RealTradeTab() {
           style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: view === "list" && !selected ? "#e74c3c" : "#2a2d3a", color: view === "list" && !selected ? "#fff" : "#aaa" }}>
           📋 목록 ({lTrades.length})
         </button>
-        <button onClick={() => { setView("add"); setSelected(null); setFeedback(""); setForm({ stock: "", date: "", textContent: "", images: [] }); }}
+        <button onClick={() => { if (view === "add") return; setView("add"); setSelected(null); setFeedback(""); setForm({ stock: "", date: "", textContent: "", images: [] }); }}
           style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: view === "add" ? "#e74c3c" : "#2a2d3a", color: view === "add" ? "#fff" : "#aaa" }}>
           추가
         </button>
@@ -2307,7 +2307,13 @@ function RealTradeTab() {
                 if (text) {
                   e.preventDefault();
                   const filtered = filterKakaoText(text);
-                  if (filtered) setForm(f => ({ ...f, textContent: f.textContent ? f.textContent + "\n" + filtered : filtered }));
+                  if (!filtered) return;
+                  const ta = e.target;
+                  const start = ta.selectionStart ?? ta.value.length;
+                  const end = ta.selectionEnd ?? ta.value.length;
+                  const next = ta.value.slice(0, start) + filtered + ta.value.slice(end);
+                  setForm(f => ({ ...f, textContent: next }));
+                  requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = start + filtered.length; });
                 }
               }}
               placeholder="카카오톡 채팅 내용을 붙여넣으세요 (Ctrl+V)..."
@@ -2378,7 +2384,7 @@ function RealTradeTab() {
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
                   <span style={{ fontSize: 18, fontWeight: 700 }}>{selected.stock}</span>
                   <span style={{ fontSize: 13, color: "#666" }}>{selected.date}</span>
-                  <button onClick={() => { setEditForm({ ...selected }); setEditTrade(true); setFeedback(""); setDeleteConfirmId(null); }}
+                  <button onClick={() => { if (editTrade) return; setEditForm({ ...selected }); setEditTrade(true); setFeedback(""); setDeleteConfirmId(null); }}
                     style={{ marginLeft: "auto", padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>수정</button>
                   {deleteConfirmId === selected.id ? (
                     <>
@@ -2482,7 +2488,13 @@ function RealTradeTab() {
                       if (text) {
                         e.preventDefault();
                         const filtered = filterKakaoText(text);
-                        if (filtered) setEditForm(f => ({ ...f, textContent: f.textContent ? f.textContent + "\n" + filtered : filtered }));
+                        if (!filtered) return;
+                        const ta = e.target;
+                        const start = ta.selectionStart ?? ta.value.length;
+                        const end = ta.selectionEnd ?? ta.value.length;
+                        const next = ta.value.slice(0, start) + filtered + ta.value.slice(end);
+                        setEditForm(f => ({ ...f, textContent: next }));
+                        requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = start + filtered.length; });
                       }
                     }}
                     style={{ ...iStyle, minHeight: 120, resize: "vertical", lineHeight: 1.6, textAlign: "left" }}
