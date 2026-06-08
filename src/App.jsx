@@ -60,7 +60,7 @@ const sbDelete = async (table, id) => {
 };
 
 const liveTradeToRow = (t) => ({
-  id: t.id, stock: t.stock, date: t.date,
+  id: t.id, title: t.title || null, stock: t.stock, date: t.date,
   text_content: t.textContent,
   images: JSON.stringify(t.images || []),
   ai_analysis: t.aiAnalysis || null,
@@ -69,7 +69,7 @@ const liveTradeToRow = (t) => ({
   deleted_at: t.deletedAt || null,
 });
 const rowToLiveTrade = (r) => ({
-  id: r.id, stock: r.stock, date: r.date,
+  id: r.id, title: r.title || null, stock: r.stock, date: r.date,
   textContent: r.text_content,
   images: (() => { try { return JSON.parse(r.images || "[]"); } catch { return []; } })(),
   aiAnalysis: r.ai_analysis,
@@ -2181,7 +2181,7 @@ function RealTradeTab() {
   const [lTrades, setLTrades] = useState([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState("list");
-  const [form, setForm] = useState({ stock: "", date: "", textContent: "", images: [] });
+  const [form, setForm] = useState({ title: "", stock: "", date: "", textContent: "", images: [] });
   const [feedback, setFeedback] = useState("");
   const [selected, setSelected] = useState(null);
   const [editForm, setEditForm] = useState(null);
@@ -2277,7 +2277,7 @@ function RealTradeTab() {
     try {
       await sbUpsert("live_trades", [liveTradeToRow(trade)]);
       setLTrades(p => [trade, ...p]);
-      setForm({ stock: "", date: "", textContent: "", images: [] });
+      setForm({ title: "", stock: "", date: "", textContent: "", images: [] });
       setFeedback("✅ 저장됨"); setView("list");
     } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
@@ -2332,7 +2332,7 @@ function RealTradeTab() {
           style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: view === "list" && !selected ? "#e74c3c" : "#2a2d3a", color: view === "list" && !selected ? "#fff" : "#aaa" }}>
           📋 목록 ({lTrades.length})
         </button>
-        <button onClick={() => { if (view === "add") return; setView("add"); setSelected(null); setFeedback(""); setForm({ stock: "", date: "", textContent: "", images: [] }); }}
+        <button onClick={() => { if (view === "add") return; setView("add"); setSelected(null); setFeedback(""); setForm({ title: "", stock: "", date: "", textContent: "", images: [] }); }}
           style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: view === "add" ? "#e74c3c" : "#2a2d3a", color: view === "add" ? "#fff" : "#aaa" }}>
           추가
         </button>
@@ -2343,15 +2343,19 @@ function RealTradeTab() {
 
       {!loading && view === "add" && (
         <div style={box}>
-          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10, marginBottom: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10, marginBottom: 10 }}>
             <div>
-              <div style={label11}>종목명 *</div>
-              <input value={form.stock} onChange={e => setForm(f => ({ ...f, stock: e.target.value }))} placeholder="종목명" style={iStyle} />
+              <div style={label11}>제목</div>
+              <input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} placeholder="제목 (예: 눌림목 매매)" style={iStyle} />
             </div>
             <div>
               <div style={label11}>날짜</div>
               <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} style={{ ...iStyle, colorScheme: "dark" }} />
             </div>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <div style={label11}>종목명 * (콤마로 여러 종목 입력 가능)</div>
+            <input value={form.stock} onChange={e => setForm(f => ({ ...f, stock: e.target.value }))} placeholder="예: 삼성전자, SK하이닉스" style={iStyle} />
           </div>
           <div style={{ marginBottom: 12 }}>
             <div style={label11}>카카오톡 내용 (Ctrl+V — [용]으로 시작하는 메시지만 자동 추출)</div>
@@ -2411,12 +2415,23 @@ function RealTradeTab() {
                 onMouseEnter={e => e.currentTarget.style.borderColor = "#e74c3c"}
                 onMouseLeave={e => e.currentTarget.style.borderColor = "#2a2d3a"}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontWeight: 700 }}>{t.stock}</span>
+                  <span style={{ fontWeight: 700 }}>{t.title || t.stock || "제목 없음"}</span>
                   <span style={{ fontSize: 12, color: "#666" }}>{t.date}</span>
                   {t.images?.length > 0 && <span style={{ fontSize: 11, color: "#555" }}>🖼️ {t.images.length}장</span>}
                   {t.aiAnalysis && <span style={{ fontSize: 11, color: "#8e44ad" }}>🤖</span>}
                 </div>
-                {t.textContent && <div style={{ marginTop: 5, fontSize: 12, color: "#666", textAlign: "left" }}>{t.textContent.slice(0, 80)}{t.textContent.length > 80 ? "..." : ""}</div>}
+                {t.stock && (
+                  <div style={{ marginTop: 4, display: "flex", flexWrap: "wrap", gap: 4 }}>
+                    {t.stock.split(",").map(s => s.trim()).filter(Boolean).map((s, i) => (
+                      <span key={i} style={{ fontSize: 11, background: "#1e2130", border: "1px solid #2a2d3a", borderRadius: 10, padding: "1px 8px", color: "#8abeee" }}>{s}</span>
+                    ))}
+                  </div>
+                )}
+                {(t.summary || t.textContent) && (
+                  <div style={{ marginTop: 5, fontSize: 12, color: "#666", textAlign: "left" }}>
+                    {(t.summary || t.textContent).slice(0, 70)}{(t.summary || t.textContent).length > 70 ? "..." : ""}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -2441,8 +2456,15 @@ function RealTradeTab() {
               <div style={box}>
                 {/* 헤더: 종목/날짜/수정/삭제 */}
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-                  <span style={{ fontSize: 18, fontWeight: 700 }}>{selected.stock}</span>
+                  <span style={{ fontSize: 18, fontWeight: 700 }}>{selected.title || selected.stock || "제목 없음"}</span>
                   <span style={{ fontSize: 13, color: "#666" }}>{selected.date}</span>
+                  {selected.title && selected.stock && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                      {selected.stock.split(",").map(s => s.trim()).filter(Boolean).map((s, i) => (
+                        <span key={i} style={{ fontSize: 11, background: "#1e2130", border: "1px solid #2a2d3a", borderRadius: 10, padding: "1px 8px", color: "#8abeee" }}>{s}</span>
+                      ))}
+                    </div>
+                  )}
                   <button onClick={() => { if (editTrade) return; setEditForm({ ...selected }); setEditTrade(true); setFeedback(""); setDeleteConfirmId(null); }}
                     style={{ marginLeft: "auto", padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>수정</button>
                   {deleteConfirmId === selected.id ? (
@@ -2585,16 +2607,20 @@ function RealTradeTab() {
               </div>
             ) : (
               <div style={box}>
-                <div style={{ fontSize: 14, fontWeight: 600, color: "#aaa", marginBottom: 10 }}>수정 중: {selected.stock}</div>
-                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10, marginBottom: 12 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: "#aaa", marginBottom: 10 }}>수정 중: {editForm.title || editForm.stock}</div>
+                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10, marginBottom: 10 }}>
                   <div>
-                    <div style={label11}>종목명 *</div>
-                    <input value={editForm.stock || ""} onChange={e => setEditForm(f => ({ ...f, stock: e.target.value }))} style={iStyle} />
+                    <div style={label11}>제목</div>
+                    <input value={editForm.title || ""} onChange={e => setEditForm(f => ({ ...f, title: e.target.value }))} placeholder="제목 (예: 눌림목 매매)" style={iStyle} />
                   </div>
                   <div>
                     <div style={label11}>날짜</div>
                     <input type="date" value={editForm.date || ""} onChange={e => setEditForm(f => ({ ...f, date: e.target.value }))} style={{ ...iStyle, colorScheme: "dark" }} />
                   </div>
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <div style={label11}>종목명 * (콤마로 여러 종목 입력 가능)</div>
+                  <input value={editForm.stock || ""} onChange={e => setEditForm(f => ({ ...f, stock: e.target.value }))} placeholder="예: 삼성전자, SK하이닉스" style={iStyle} />
                 </div>
                 <div style={{ marginBottom: 12 }}>
                   <div style={label11}>내용 (Ctrl+V로 카카오톡 추가 가능)</div>
