@@ -965,10 +965,10 @@ function JournalTab({ techniques }) {
         setChartImg(b64);
         const raw = await claude("JSON만 출력.", [
           { type: "image", source: { type: "base64", media_type: mediaType, data: b64 } },
-          { type: "text", text: `키움 [0606] 자동일지차트에서 JSON 추출. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"stock":"종목명","date":"YYYY-MM-DD","buyPrice":매수가숫자,"sellPrice":매도가숫자,"pnlRate":수익률숫자,"chartDescription":"차트패턴설명"}\n확인불가는 null.` }
-        ], 1500);
+          { type: "text", text: `키움 [0606] 자동일지차트에서 종목명과 날짜만 추출. 오늘은 ${new Date().getFullYear()}년이므로 연도를 정확히 판단하라. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"stock":"종목명","date":"YYYY-MM-DD"}\n확인불가는 null.` }
+        ], 500);
         const p = await parseJSON(raw);
-        setForm(f => ({ ...f, stock: p.stock || "", date: p.date || "", buyPrice: p.buyPrice || "", sellPrice: p.sellPrice || "", pnlRate: p.pnlRate || "", chartDesc: p.chartDescription || "" }));
+        setForm(f => ({ ...f, stock: p.stock || "", date: p.date || "" }));
         setFeedback("✅ 차트 정보 추출 완료");
       } else {
         const raw = await claude("JSON만 출력.", [
@@ -1151,15 +1151,11 @@ function JournalTab({ techniques }) {
       const b64 = await compressImage(file);
       const raw = await claude("JSON만 출력.", [
         { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
-        { type: "text", text: `키움 [0606] 자동일지차트에서 JSON 추출. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"stock":"종목명","date":"YYYY-MM-DD","buyPrice":매수가숫자,"sellPrice":매도가숫자,"pnlRate":수익률숫자,"chartDescription":"차트패턴설명"}\n확인불가는 null.` }
-      ], 1500);
+        { type: "text", text: `키움 [0606] 자동일지차트에서 종목명과 날짜만 추출. 오늘은 ${new Date().getFullYear()}년이므로 연도를 정확히 판단하라. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"stock":"종목명","date":"YYYY-MM-DD"}\n확인불가는 null.` }
+      ], 500);
       const p = await parseJSON(raw);
       setPending0397(prev => prev.map((r, j) => j !== idx ? r : {
         ...r, chartImg: b64,
-        ...(p.buyPrice != null && { buyPrice: p.buyPrice }),
-        ...(p.sellPrice != null && { sellPrice: p.sellPrice }),
-        ...(p.pnlRate != null && { pnlRate: p.pnlRate }),
-        ...(p.chartDescription && { chartDesc: p.chartDescription }),
       }));
       setFeedback("✅ 차트 첨부됨");
     } catch (e) { setFeedback(`❌ ${e.message}`); }
@@ -1313,17 +1309,13 @@ function JournalTab({ techniques }) {
       const b64 = await compressImage(file);
       const raw = await claude("JSON만 출력.", [
         { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
-        { type: "text", text: `키움 [0606] 자동일지차트에서 JSON 추출:\n{"stock":"종목명","date":"YYYY-MM-DD","buyPrice":매수가숫자,"sellPrice":매도가숫자,"pnlRate":수익률숫자,"chartDescription":"차트패턴설명"}\n확인불가는 null.` }
-      ], 1000);
+        { type: "text", text: `키움 [0606] 자동일지차트에서 종목명과 날짜만 추출. 오늘은 ${new Date().getFullYear()}년이므로 연도를 정확히 판단하라. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"stock":"종목명","date":"YYYY-MM-DD"}\n확인불가는 null.` }
+      ], 500);
       const p = await parseJSON(raw);
       setEditForm(f => ({
         ...f, chartImg: b64,
         ...(p.stock && { stock: p.stock }),
         ...(p.date && { date: p.date }),
-        ...(p.buyPrice != null && { buyPrice: p.buyPrice }),
-        ...(p.sellPrice != null && { sellPrice: p.sellPrice }),
-        ...(p.pnlRate != null && { pnlRate: p.pnlRate }),
-        ...(p.chartDescription && { chartDesc: p.chartDescription }),
       }));
       setFeedback("✅ 차트 정보 추출 완료");
     } catch (e) { setFeedback(`❌ ${e.message}`); }
