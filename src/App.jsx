@@ -973,8 +973,8 @@ function JournalTab({ techniques }) {
       } else {
         const raw = await claude("JSON만 출력.", [
           { type: "image", source: { type: "base64", media_type: mediaType, data: b64 } },
-          { type: "text", text: `키움 [0328] 매매일지에서 JSON 추출. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"date":"YYYY-MM-DD 또는 null","trades":[{"date":"YYYY-MM-DD 또는 null","stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}` }
-        ], 3000);
+          { type: "text", text: `키움 [0328] 매매일지에서 JSON 추출. 테이블의 모든 행을 빠짐없이 추출하라. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"date":"YYYY-MM-DD 또는 null","trades":[{"date":"YYYY-MM-DD 또는 null","stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}\n동일 종목도 행마다 개별 객체로 모두 포함.` }
+        ], 4096);
         const p = await parseJSON(raw);
         const tradeList = Array.isArray(p) ? p : (p.trades || []);
         const extractedDate = (!Array.isArray(p) && p.date && p.date !== "null") ? p.date : "";
@@ -1077,8 +1077,8 @@ function JournalTab({ techniques }) {
     const b64 = await compressImage(file);
     const raw = await claude("JSON만 출력.", [
       { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
-      { type: "text", text: `키움 [0328] 매매일지에서 JSON 추출. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"date":"YYYY-MM-DD 또는 null","trades":[{"date":"YYYY-MM-DD 또는 null","stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}` }
-    ], 3000);
+      { type: "text", text: `키움 [0328] 매매일지에서 JSON 추출. 테이블의 모든 행을 빠짐없이 추출하라. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"date":"YYYY-MM-DD 또는 null","trades":[{"date":"YYYY-MM-DD 또는 null","stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}\n동일 종목도 행마다 개별 객체로 모두 포함.` }
+    ], 4096);
     const p = await parseJSON(raw);
     return Array.isArray(p) ? p : (p.trades || []);
   };
@@ -2103,8 +2103,8 @@ function JournalTab({ techniques }) {
                   const b64 = await compressImage(files[0]);
                   const raw = await claude("JSON만 출력.", [
                     { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
-                    { type: "text", text: `키움 [0328] 매매일지에서 JSON 추출. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"date":"YYYY-MM-DD 또는 null","trades":[{"date":"YYYY-MM-DD 또는 null","stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}` }
-                  ], 3000);
+                    { type: "text", text: `키움 [0328] 매매일지에서 JSON 추출. 테이블의 모든 행을 빠짐없이 추출하라. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"date":"YYYY-MM-DD 또는 null","trades":[{"date":"YYYY-MM-DD 또는 null","stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}\n동일 종목도 행마다 개별 객체로 모두 포함.` }
+                  ], 4096);
                   const p = await parseJSON(raw);
                   const tl = Array.isArray(p) ? p : (p.trades || []);
                   const matches = editForm?.stock ? tl.filter(t => matchStock(t.stock, editForm.stock)) : [];
