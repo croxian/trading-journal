@@ -862,6 +862,7 @@ function JournalTab({ techniques }) {
   const [editForm, setEditForm] = useState(null);
   const [editImgLoading, setEditImgLoading] = useState(false);
   const [sel0397, setSel0397] = useState(new Set());
+  const [expanded0397, setExpanded0397] = useState(null);
   const [pendingPpt, setPendingPpt] = useState([]);
   const [pptLoading, setPptLoading] = useState(false);
   const [pptProgress, setPptProgress] = useState("");
@@ -1012,8 +1013,12 @@ function JournalTab({ techniques }) {
     }
     if (imageFiles.length === 0) return;
     e.preventDefault();
-    const mode = inputMode === "img0606" ? "0606" : "0397";
-    await processImage(imageFiles[0], mode);
+    if (inputMode === "img0606" && form.chartImg) {
+      await fillFormFrom0397(imageFiles[0]);
+    } else {
+      const mode = inputMode === "img0606" ? "0606" : "0397";
+      await processImage(imageFiles[0], mode);
+    }
   };
 
   const handleImageExtract = async (e, type) => {
@@ -1054,7 +1059,7 @@ function JournalTab({ techniques }) {
       const newTrades = pending0397.map((t, i) => ({
         ...t, date: t.date || bulk0397Date, id: base + i,
         createdAt: new Date().toLocaleDateString("ko-KR"),
-        chartImg: null, aiAnalysis: "", reason: "", technique: "", memo: "", chartDesc: "",
+        chartImg: t.chartImg || null, aiAnalysis: "", reason: "", technique: "", memo: "", chartDesc: t.chartDesc || "",
       }));
       await sbUpsert("trades", newTrades.map(tradeToRow));
       setTrades(p => [...[...newTrades].reverse(), ...p]);
@@ -1118,6 +1123,27 @@ function JournalTab({ techniques }) {
       .sort((a, b) => b.score - a.score || (b.t.date || "").localeCompare(a.t.date || ""))
       .slice(0, 8)
       .map(({ t }) => t);
+  };
+
+  const attach0606ToPending = async (file, idx) => {
+    setFill0397Loading(true); setFeedback("");
+    try {
+      const b64 = await compressImage(file);
+      const raw = await claude("JSON만 출력.", [
+        { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
+        { type: "text", text: `키움 [0606] 자동일지차트에서 JSON 추출. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"stock":"종목명","date":"YYYY-MM-DD","buyPrice":매수가숫자,"sellPrice":매도가숫자,"pnlRate":수익률숫자,"chartDescription":"차트패턴설명"}\n확인불가는 null.` }
+      ], 1500);
+      const p = await parseJSON(raw);
+      setPending0397(prev => prev.map((r, j) => j !== idx ? r : {
+        ...r, chartImg: b64,
+        ...(p.buyPrice != null && { buyPrice: p.buyPrice }),
+        ...(p.sellPrice != null && { sellPrice: p.sellPrice }),
+        ...(p.pnlRate != null && { pnlRate: p.pnlRate }),
+        ...(p.chartDescription && { chartDesc: p.chartDescription }),
+      }));
+      setFeedback("✅ 차트 첨부됨");
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+    setFill0397Loading(false);
   };
 
   const fillFormFrom0397 = async (file) => {
@@ -1654,19 +1680,50 @@ function JournalTab({ techniques }) {
                     style={{ background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "6px 10px", fontSize: 13, colorScheme: "dark" }} />
                 </div>
                 <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
-                  {pending0397.map((t, i) => (
-                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, background: "#13151f", borderRadius: 6, padding: "8px 10px", fontSize: 12 }}>
-                      <span style={{ fontWeight: 600, minWidth: 80, color: "#ddd" }}>{t.stock}</span>
-                      {t.date && <span style={{ fontSize: 11, color: "#555" }}>{t.date}</span>}
-                      <span style={{ color: "#777" }}>매수 {t.buyPrice}</span>
-                      <span style={{ color: "#777" }}>매도 {t.sellPrice}</span>
-                      <span style={{ marginLeft: "auto", fontWeight: 700, color: pnlColor(parseFloat(t.pnlRate)) }}>
-                        {parseFloat(t.pnlRate) > 0 ? "+" : ""}{t.pnlRate}%
-                      </span>
-                      <button onClick={() => setPending0397(p => p.filter((_, j) => j !== i))}
-                        style={{ background: "none", border: "none", color: "#e74c3c", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "0 2px" }}>✕</button>
-                    </div>
-                  ))}
+                  {pending0397.map((t, i) => {
+                    const isOpen = expanded0397 === i;
+                    return (
+                      <div key={i} style={{ background: "#13151f", borderRadius: 6, overflow: "hidden", border: `1px solid ${isOpen ? "#4f8ef7" : "transparent"}` }}>
+                        <div onClick={() => setExpanded0397(p => p === i ? null : i)}
+                          style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", fontSize: 12, cursor: "pointer" }}>
+                          {t.chartImg && <span style={{ fontSize: 10, color: "#4f8ef7" }}>🖼️</span>}
+                          <span style={{ fontWeight: 600, minWidth: 80, color: "#ddd" }}>{t.stock}</span>
+                          {t.date && <span style={{ fontSize: 11, color: "#555" }}>{t.date}</span>}
+                          <span style={{ color: "#777" }}>매수 {t.buyPrice}</span>
+                          <span style={{ color: "#777" }}>매도 {t.sellPrice}</span>
+                          <span style={{ marginLeft: "auto", fontWeight: 700, color: pnlColor(parseFloat(t.pnlRate)) }}>
+                            {parseFloat(t.pnlRate) > 0 ? "+" : ""}{t.pnlRate}%
+                          </span>
+                          <button onClick={e => { e.stopPropagation(); setPending0397(p => p.filter((_, j) => j !== i)); if (expanded0397 === i) setExpanded0397(null); }}
+                            style={{ background: "none", border: "none", color: "#e74c3c", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "0 2px" }}>✕</button>
+                        </div>
+                        {isOpen && (
+                          <div style={{ borderTop: "1px solid #2a2d3a", padding: "10px 10px 10px" }}>
+                            {t.chartImg && <img src={`data:image/jpeg;base64,${t.chartImg}`} alt="chart" style={{ width: "100%", maxHeight: 160, objectFit: "contain", borderRadius: 6, marginBottom: 8, background: "#0f1117" }} />}
+                            <div
+                              tabIndex={0}
+                              onClick={e => e.currentTarget.focus()}
+                              onPaste={async e => {
+                                const files = [];
+                                if (e.clipboardData?.items) for (const item of Array.from(e.clipboardData.items)) { if (item.type.startsWith("image/")) { const f = item.getAsFile(); if (f) files.push(f); } }
+                                if (!files.length) return;
+                                e.preventDefault();
+                                await attach0606ToPending(files[0], i);
+                              }}
+                              style={{ padding: "6px 12px", background: "#2a2d3a", border: "1px dashed #4f8ef7", borderRadius: 6, cursor: "text", fontSize: 12, color: "#aaa", outline: "none", display: "flex", alignItems: "center", gap: 8 }}
+                            >
+                              🖼️ 0606 차트 Ctrl+V
+                              <label style={{ marginLeft: 4, color: "#4f8ef7", cursor: "pointer", fontSize: 11 }} onClick={e => e.stopPropagation()}>
+                                파일선택
+                                <input type="file" accept="image/*" style={{ display: "none" }} onChange={async e => { const f = e.target.files[0]; if (f) { await attach0606ToPending(f, i); e.target.value = ""; } }} />
+                              </label>
+                            </div>
+                            {fill0397Loading && <span style={{ fontSize: 11, color: "#aaa", marginTop: 4, display: "block" }}>⏳ 추출 중...</span>}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
                 <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                   <button onClick={handleBulkSave0397} style={{ padding: "8px 20px", background: "#4f8ef7", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>전체 저장</button>
