@@ -1013,8 +1013,12 @@ function JournalTab({ techniques }) {
     }
     if (imageFiles.length === 0) return;
     e.preventDefault();
-    if (inputMode === "img0606" && form.chartImg) {
+    if (inputMode === "img0606" && chartImg) {
+      // 0606 차트 이미 추출됨 → 다음 붙여넣기는 0328 재무 데이터로 처리
       await fillFormFrom0397(imageFiles[0]);
+    } else if (inputMode === "img0397" && expanded0397 !== null) {
+      // 0328 목록에서 항목 펼쳐진 상태 → 0606 차트 첨부
+      await attach0606ToPending(imageFiles[0], expanded0397);
     } else {
       const mode = inputMode === "img0606" ? "0606" : "0397";
       await processImage(imageFiles[0], mode);
