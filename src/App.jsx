@@ -979,16 +979,32 @@ function JournalTab({ techniques }) {
         const tradeList = Array.isArray(p) ? p : (p.trades || []);
         const extractedDate = (!Array.isArray(p) && p.date && p.date !== "null") ? p.date : "";
         if (tradeList.length > 0) {
-          const rawRows = tradeList.map(f => ({
-            stock: f.stock || "",
-            date: (f.date && f.date !== "null") ? f.date : extractedDate,
-            buyPrice: f.buyPrice ?? "", sellPrice: f.sellPrice ?? "",
-            pnl: f.pnl ?? "", pnlRate: f.pnlRate ?? "", amount: f.buyAmount ?? "",
+          // 날짜 보정: 행별 date 없으면 상위 date 사용
+          const filled = tradeList.map(f => ({
+            ...f,
+            date: (f.date && f.date !== "null") ? f.date : (extractedDate || null),
           }));
-          const merged = autoMergeByStock(rawRows);
+          // 종목+날짜 기준으로 그룹화 후 merge0397Rows(수정 탭과 동일 로직) 적용
+          const groups = [];
+          filled.forEach(f => {
+            const g = groups.find(g => matchStock(g[0].stock, f.stock) && g[0].date === f.date);
+            if (g) g.push(f); else groups.push([f]);
+          });
+          const merged = groups.map(g => {
+            const m = merge0397Rows(g);
+            return {
+              stock: m.stock || "",
+              date: m.date || "",
+              buyPrice: m.buyPrice ?? "",
+              sellPrice: m.sellPrice ?? "",
+              pnl: m.pnl ?? "",
+              pnlRate: m.pnlRate ?? "",
+              amount: m.buyAmount ?? "",
+            };
+          });
           setPending0397(merged);
           setBulk0397Date(extractedDate || new Date().toISOString().slice(0, 10));
-          const mergeNote = merged.length < rawRows.length ? ` (${rawRows.length}행 → ${merged.length}종목 자동 머지)` : "";
+          const mergeNote = merged.length < filled.length ? ` (${filled.length}행 → ${merged.length}종목 자동 머지)` : "";
           setFeedback(`✅ ${merged.length}개 종목 추출 완료${mergeNote}`);
         } else {
           setFeedback("❌ 추출된 종목 없음");
