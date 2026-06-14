@@ -539,132 +539,6 @@ function DashboardTab({ onNavigate }) {
   );
 }
 
-// ==================== Notion 동기화 ====================
-const NOTION_TOKEN = import.meta.env.VITE_NOTION_TOKEN;
-const NOTION_PARENT_ID = "373c885af5a4812ca6e7fab7e018abfe";
-const NOTION_HDR = { "Authorization": `Bearer ${NOTION_TOKEN}`, "Content-Type": "application/json", "Notion-Version": "2022-06-28" };
-
-const notionCreatePage = async (tech) => {
-  const blocks = [];
-  const addBlock = (label, content) => {
-    if (!content) return;
-    blocks.push({ object: "block", type: "heading_3", heading_3: { rich_text: [{ type: "text", text: { content: label } }] } });
-    blocks.push({ object: "block", type: "paragraph", paragraph: { rich_text: [{ type: "text", text: { content: String(content) } }] } });
-  };
-
-  addBlock("📌 매수 조건", tech.entry?.condition);
-  addBlock("📍 매수 위치", tech.entry?.position);
-  addBlock("⚠️ 주의사항", tech.entry?.caution);
-  addBlock("✅ 익절 조건", tech.exit?.profit);
-  addBlock("🛑 손절 조건", tech.exit?.loss);
-  addBlock("📈 매수 전 구조", tech.pattern?.before);
-  addBlock("⚡ 매수 트리거", tech.pattern?.trigger);
-  addBlock("🔮 예상 흐름", tech.pattern?.after);
-  addBlock("📝 메모", tech.notes);
-
-  if (tech.rawInput) {
-    blocks.push({ object: "block", type: "heading_3", heading_3: { rich_text: [{ type: "text", text: { content: "📄 원본 텍스트" } }] } });
-    // Notion 블록 하나당 2000자 제한 → 청크 분할
-    const raw = String(tech.rawInput);
-    for (let i = 0; i < raw.length; i += 1900) {
-      blocks.push({ object: "block", type: "paragraph", paragraph: { rich_text: [{ type: "text", text: { content: raw.slice(i, i + 1900) } }] } });
-    }
-  }
-
-  const title = `[${tech.category || "기타"}] ${tech.name || "이름없음"}`;
-  const res = await fetch("https://api.notion.com/v1/pages", {
-    method: "POST", headers: NOTION_HDR,
-    body: JSON.stringify({
-      parent: { page_id: NOTION_PARENT_ID },
-      properties: { title: { title: [{ type: "text", text: { content: title } }] } },
-      children: blocks.slice(0, 100)
-    })
-  });
-  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-  return res.json();
-};
-
-const notionGetChildren = async (pageId) => {
-  const res = await fetch(`https://api.notion.com/v1/blocks/${pageId}/children?page_size=100`, { headers: NOTION_HDR });
-  if (!res.ok) return [];
-  const data = await res.json();
-  return data.results || [];
-};
-
-const notionDeletePage = async (pageId) => {
-  await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
-    method: "PATCH", headers: NOTION_HDR,
-    body: JSON.stringify({ archived: true })
-  });
-};
-
-// ==================== 동기화 모달 ====================
-function SyncModal({ onClose }) {
-  const [log, setLog] = useState([]);
-  const [status, setStatus] = useState("idle");
-  const addLog = (msg, color = "#aaa") => setLog(p => [...p, { msg, color }]);
-
-  const runSync = async () => {
-    setStatus("running"); setLog([]);
-    try {
-      // 1. Supabase에서 전체 기법 로드
-      addLog("📥 Supabase에서 기법 로드 중...");
-      const rows = await sbGet("techniques");
-      const techs = rows.map(rowToTech);
-      addLog(`✅ ${techs.length}개 기법 로드 완료`, "#4caf50");
-
-      // 2. 기존 Notion 하위 페이지 삭제
-      addLog("🗑️ 기존 Notion 페이지 삭제 중...");
-      const children = await notionGetChildren(NOTION_PARENT_ID);
-      const pages = children.filter(b => b.type === "child_page");
-      for (const p of pages) {
-        await notionDeletePage(p.id);
-      }
-      addLog(`✅ ${pages.length}개 기존 페이지 삭제 완료`, "#4caf50");
-
-      // 3. 전체 재생성
-      addLog("📝 Notion 페이지 생성 중...");
-      let done = 0;
-      for (const tech of techs) {
-        await notionCreatePage(tech);
-        done++;
-        addLog(`  [${done}/${techs.length}] ${tech.name}`, "#888");
-      }
-      addLog("🎉 동기화 완료!", "#4f8ef7");
-      setStatus("done");
-    } catch (e) {
-      addLog(`❌ 오류: ${e.message}`, "#e74c3c");
-      setStatus("error");
-    }
-  };
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
-      <div style={{ background: "#1a1d27", border: "1px solid #2a2d3a", borderRadius: 12, padding: 24, width: 500, maxHeight: "80vh", display: "flex", flexDirection: "column" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <span style={{ fontSize: 16, fontWeight: 700 }}>🔄 Notion 동기화</span>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: "#aaa", cursor: "pointer", fontSize: 18 }}>✕</button>
-        </div>
-        <div style={{ fontSize: 13, color: "#888", marginBottom: 16 }}>
-          Supabase 기법 전체를 Notion에 원본 그대로 재생성합니다.<br/>
-          기존 Notion 페이지는 모두 삭제 후 재작성됩니다.
-        </div>
-        {status === "idle" && (
-          <button onClick={runSync} style={{ padding: "10px 24px", background: "#4f8ef7", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 14 }}>
-            동기화 시작
-          </button>
-        )}
-        <div style={{ flex: 1, overflow: "auto", marginTop: 12, background: "#13151f", borderRadius: 8, padding: 12, fontFamily: "monospace", fontSize: 12, minHeight: 120 }}>
-          {log.map((l, i) => <div key={i} style={{ color: l.color, marginBottom: 2 }}>{l.msg}</div>)}
-          {status === "running" && <div style={{ color: "#aaa" }}>실행 중...</div>}
-        </div>
-        {(status === "done" || status === "error") && (
-          <button onClick={onClose} style={{ marginTop: 12, padding: "8px 20px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>닫기</button>
-        )}
-      </div>
-    </div>
-  );
-}
 const LECTURE_SYSTEM = `단기 주식 매매 강의록을 구조화하는 전문가. 반드시 JSON만 출력.
 입력 전처리: 인사말/감사/광고/잡담 제거.
 {"name":"기법 이름","category":"갭하락매수|돌파매매|눌림매수|상한가하락시작|기타","timeframe":"3분봉 등","entry":{"condition":"","position":"","caution":""},"exit":{"profit":"","loss":""},"pattern":{"before":"","trigger":"","after":""},"tags":[],"notes":""}`;
@@ -684,6 +558,7 @@ function LectureTab() {
   const [view, setView] = useState("list");
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const scrollTargetRef = useScrollRestore(view);
+  const isMobile = useIsMobile();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -789,7 +664,7 @@ function LectureTab() {
           : <div style={{ display: "grid", gap: 10 }}>
             {techniques.map(t => (
               <div key={t.id} id={`tech-row-${t.id}`} onClick={() => { setSelected(t); setView("detail"); setFeedback(""); }}
-                style={{ ...box, cursor: "pointer" }}
+                style={{ ...box, cursor: "pointer", scrollMarginTop: isMobile ? 90 : 50 }}
                 onMouseEnter={e => e.currentTarget.style.borderColor = "#4f8ef7"}
                 onMouseLeave={e => e.currentTarget.style.borderColor = "#2a2d3a"}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -2063,7 +1938,7 @@ function JournalTab({ techniques }) {
           return (
             <div key={t.id} id={`trade-row-${t.id}`}
               onClick={() => selectMode ? toggleSelect(t.id) : openDetail(t)}
-              style={{ ...box, cursor: "pointer", borderColor: checked ? "#e74c3c" : isWatch ? "#3a3a2a" : "#2a2d3a", background: checked ? "#2a1a1a" : "#1a1d27" }}
+              style={{ ...box, cursor: "pointer", borderColor: checked ? "#e74c3c" : isWatch ? "#3a3a2a" : "#2a2d3a", background: checked ? "#2a1a1a" : "#1a1d27", scrollMarginTop: isMobile ? 90 : 50 }}
               onMouseEnter={e => { if (!checked) e.currentTarget.style.borderColor = isWatch ? "#f39c12" : "#4f8ef7"; }}
               onMouseLeave={e => { if (!checked) e.currentTarget.style.borderColor = isWatch ? "#3a3a2a" : "#2a2d3a"; }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -2105,7 +1980,7 @@ function JournalTab({ techniques }) {
           <div style={{ display: "grid", gap: 4 }}>
             {SelectBar}
             {sortedDates.map(date => (
-              <div key={date} id={`date-sec-${date}`}>
+              <div key={date} id={`date-sec-${date}`} style={{ scrollMarginTop: isMobile ? 90 : 50 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 2px", borderBottom: "1px solid #2a2d3a", marginBottom: 6 }}>
                   <span style={{ fontSize: 12, fontWeight: 600, color: isWatch ? "#f39c12" : "#4f8ef7" }}>📅 {date}</span>
                   <span style={{ fontSize: 11, color: "#555" }}>{grouped[date].length}건</span>
@@ -2690,7 +2565,7 @@ function RealTradeTab() {
         if (lTrades.length === 0) return <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>실전매매 기록 없음</div>;
         const TradeRow = (t) => (
           <div key={t.id} id={`live-row-${t.id}`} onClick={() => openDetail(t)}
-            style={{ ...box, cursor: "pointer" }}
+            style={{ ...box, cursor: "pointer", scrollMarginTop: isMobile ? 90 : 50 }}
             onMouseEnter={e => e.currentTarget.style.borderColor = "#e74c3c"}
             onMouseLeave={e => e.currentTarget.style.borderColor = "#2a2d3a"}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -2720,7 +2595,7 @@ function RealTradeTab() {
         return (
           <div style={{ display: "grid", gap: 4 }}>
             {sortedDates.map(date => (
-              <div key={date} id={`date-sec-${date}`}>
+              <div key={date} id={`date-sec-${date}`} style={{ scrollMarginTop: isMobile ? 90 : 50 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 2px", borderBottom: "1px solid #2a2d3a", marginBottom: 6 }}>
                   <span style={{ fontSize: 12, fontWeight: 600, color: "#e74c3c" }}>📅 {date}</span>
                   <span style={{ fontSize: 11, color: "#555" }}>{grouped[date].length}건</span>
@@ -3121,7 +2996,7 @@ function StatsTab() {
 export default function App() {
   const [activeTab, setActiveTab] = useState(0);
   const [techniques, setTechniques] = useState([]);
-  const [showSync, setShowSync] = useState(false);
+  const [showScrollTop, setShowScrollTop] = useState(false);
   const isMobile = useIsMobile();
 
   useEffect(() => {
@@ -3142,18 +3017,19 @@ export default function App() {
     return () => window.removeEventListener("popstate", handlePop);
   }, []);
 
+  useEffect(() => {
+    const onScroll = () => setShowScrollTop(window.scrollY > 300);
+    window.addEventListener("scroll", onScroll);
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
   return (
     <div style={{ fontFamily: "sans-serif", background: "#0f1117", minHeight: "100vh", color: "#e0e0e0" }}>
-      {showSync && <SyncModal onClose={() => setShowSync(false)} />}
-      <div style={{ background: "#1a1d27", borderBottom: "1px solid #2a2d3a" }}>
+      <div style={{ position: "sticky", top: 0, zIndex: 100, background: "#1a1d27", borderBottom: "1px solid #2a2d3a" }}>
         {/* 모바일: 타이틀 행 */}
         {isMobile && (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderBottom: "1px solid #2a2d3a" }}>
             <span style={{ fontSize: 14, fontWeight: 700, color: "#fff" }}>📈 매매 시스템</span>
-            <button onClick={() => setShowSync(true)}
-              style={{ padding: "5px 10px", background: "#2a2d3a", border: "1px solid #3a3d4a", color: "#aaa", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>
-              📒
-            </button>
           </div>
         )}
         {/* 탭 바 */}
@@ -3166,12 +3042,6 @@ export default function App() {
                 color: activeTab === i ? "#fff" : "#666", cursor: "pointer",
                 fontSize: isMobile ? 12 : 14, fontWeight: activeTab === i ? 600 : 400, whiteSpace: "nowrap", flexShrink: 0 }}>{t}</button>
           ))}
-          {!isMobile && (
-            <button onClick={() => setShowSync(true)}
-              style={{ marginLeft: "auto", padding: "6px 12px", background: "#2a2d3a", border: "1px solid #3a3d4a", color: "#aaa", borderRadius: 6, cursor: "pointer", fontSize: 12, whiteSpace: "nowrap" }}>
-              📒 Notion 동기화
-            </button>
-          )}
         </div>
       </div>
       <div style={{ padding: isMobile ? 12 : 20, maxWidth: 960, margin: "0 auto" }}>
@@ -3181,6 +3051,13 @@ export default function App() {
         {activeTab === 3 && <LectureTab />}
         {activeTab === 4 && <RealTradeTab />}
       </div>
+      {showScrollTop && (
+        <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          title="맨 위로"
+          style={{ position: "fixed", right: 20, bottom: 20, width: 44, height: 44, borderRadius: "50%", background: "#4f8ef7", color: "#fff", border: "none", cursor: "pointer", fontSize: 18, boxShadow: "0 2px 8px rgba(0,0,0,0.4)", zIndex: 150 }}>
+          ↑
+        </button>
+      )}
     </div>
   );
 }
