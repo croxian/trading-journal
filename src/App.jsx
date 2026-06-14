@@ -1275,24 +1275,27 @@ function JournalTab({ techniques }) {
     if (!selected?.reason) { setFeedback("❌ 매매 이유를 먼저 입력하세요."); return; }
     setDetailAiLoading(true); setDetailAiAnalysis("");
     try {
-      // 1. 적용 기법과 관련된 강의록만 우선 선별 (기법에 포커스)
+      // 1. 적용 기법과 관련된 강의록을 우선 선별하되, 나머지 강의록도 요약 형태로 함께 제공 (다른 강의록에 유사 내용이 있을 수 있음)
       const group = techGroupOf(selected.technique);
       const keywords = [...new Set([selected.technique, group, ...group.split("-")].filter(s => s && s.length >= 2))];
       const relatedTechs = techniques.filter(t => {
         const hay = `${t.name || ""} ${t.category || ""} ${(t.tags || []).join(" ")} ${t.rawInput || ""}`;
         return keywords.some(k => hay.includes(k));
       });
-      const techsToUse = relatedTechs.length ? relatedTechs : techniques.slice(0, 10);
-      const techSummary = techsToUse.map(t =>
+      const otherTechs = techniques.filter(t => !relatedTechs.includes(t));
+      const techSummary = relatedTechs.map(t =>
         `[${t.name}] 카테고리:${t.category} / 타임프레임:${t.timeframe || "-"}\n` +
         `- 매수조건:${t.entry?.condition || "-"} / 포지션:${t.entry?.position || "-"} / 주의:${t.entry?.caution || "-"}\n` +
         `- 패턴(진입전→트리거→진입후): ${t.pattern?.before || "-"} → ${t.pattern?.trigger || "-"} → ${t.pattern?.after || "-"}\n` +
         `- 청산(수익/손실): ${t.exit?.profit || "-"} / ${t.exit?.loss || "-"}` +
         (t.rawInput ? `\n- 원문: ${t.rawInput.slice(0, 500)}` : '')
       ).join('\n\n');
+      const otherTechSummary = otherTechs.map(t =>
+        `[${t.name}] 카테고리:${t.category} / 매수조건:${t.entry?.condition || "-"} / 트리거:${t.pattern?.trigger || "-"} / 태그:${(t.tags || []).join(",") || "-"}`
+      ).join('\n');
       const techNote = relatedTechs.length
         ? ""
-        : "\n(주의: 이 매매의 기법(" + (selected.technique || "미지정") + ")과 직접 매칭되는 강의록을 찾지 못함. 위 목록은 참고용 일부 강의록이며, 기법 매칭이 안 된다는 점을 분석에 명시할 것.)";
+        : `\n(주의: 이 매매의 기법(${selected.technique || "미지정"})과 직접 매칭되는 강의록을 찾지 못함. 기법 매칭이 안 된다는 점을 분석에 명시할 것.)`;
 
       // 2. 과거 유사 매매 (매매이유 워딩 참고용)
       const pastTradesArr = trades.filter(t => t.id !== selected.id && !t.deletedAt && t.reason).slice(0, 15);
@@ -1330,11 +1333,12 @@ function JournalTab({ techniques }) {
         `[현재 매매] 종목:${selected.stock} 날짜:${selected.date}${dayLabel} 수익률:${selected.pnlRate}% 적용기법:${selected.technique || "미지정"}\n` +
         `매매이유: ${selected.reason}\n${selected.memo ? `메모: ${selected.memo}\n` : ""}\n` +
         `${imageNote}\n\n` +
-        `[적용 기법 강의록]\n${techSummary || "(저장된 강의록 없음)"}${techNote}\n\n` +
+        `[적용 기법 강의록 - 우선 참고]\n${techSummary || "(직접 매칭되는 강의록 없음)"}${techNote}\n\n` +
+        `[기타 강의록 목록 - 위 기법에 없어도 이번 매매와 유사한 내용이 있는지 추가로 확인]\n${otherTechSummary || "(없음)"}\n\n` +
         `[동일 날짜(${selected.date}) 실전매매 기록]\n${liveSection}\n\n` +
         `[과거 유사 매매 - 매매이유 원문]\n${pastTrades || "(없음)"}\n\n` +
         `아래 항목을 분석:\n` +
-        `1. 기법 매칭: 이번 매매가 [적용 기법 강의록]의 진입조건/포지션/주의사항에 얼마나 부합하는지 (강의록 근거를 인용)\n` +
+        `1. 기법 매칭: 이번 매매가 [적용 기법 강의록]의 진입조건/포지션/주의사항에 얼마나 부합하는지 (강의록 근거를 인용). [기타 강의록 목록]에 이번 매매와 더 유사한 내용이 있다면 함께 언급\n` +
         `2. 차트 분석: 첨부된 차트가 있다면 봉의 모양과 진입/이탈 시간대가 기법의 트리거·패턴 설명과 일치하는지 확인. 차트가 없거나 기법과 무관한 내용은 생략\n` +
         `3. 정답매매: 강의록 기법 기준 이상적 진입/손절/익절 시나리오 (실제 매매 아님). 금액은 같은 표기 규칙으로 괄호 안 숫자(만원) 표기, 퍼센트 금지\n` +
         `4. 잘된 점 / 개선할 점 (기법 부합도 중심)\n` +
