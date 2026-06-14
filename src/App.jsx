@@ -1297,8 +1297,16 @@ function JournalTab({ techniques }) {
         ? ""
         : `\n(주의: 이 매매의 기법(${selected.technique || "미지정"})과 직접 매칭되는 강의록을 찾지 못함. 기법 매칭이 안 된다는 점을 분석에 명시할 것.)`;
 
-      // 2. 과거 유사 매매 (매매이유 워딩 참고용)
-      const pastTradesArr = trades.filter(t => t.id !== selected.id && !t.deletedAt && t.reason).slice(0, 15);
+      // 1-1. 동일 날짜 + 동일 종목, 다른 기법으로 세분화된 매매 (있다면 기법별로 구분하여 분석)
+      const siblingTrades = trades.filter(t => t.id !== selected.id && !t.deletedAt && t.date === selected.date && matchStock(t.stock, selected.stock));
+      const siblingNote = siblingTrades.length
+        ? `\n[같은 날(${selected.date}) 동일 종목(${selected.stock})의 다른 기법 매매 - 기법별로 세분화되어 기록됨]\n` +
+          siblingTrades.map(t => `[기법:${t.technique || "-"}] 매수가:${t.buyPrice || "-"} 매도가:${t.sellPrice || "-"} 수익률:${t.pnlRate}%\n매매이유: ${t.reason?.slice(0, 150) || "-"}`).join('\n\n') +
+          `\n위 매매들은 같은 종목을 진입/청산 구간별로 기법을 나누어 기록한 것이다. 이번 분석은 [현재 매매](기법:${selected.technique || "미지정"})의 매수가/매도가/매매이유에 해당하는 구간에만 집중하고, 다른 기법의 매매와 합쳐서 분석하거나 혼동하지 말 것. 각 기법은 별도로 분석할 것.\n`
+        : "";
+
+      // 2. 과거 유사 매매 (매매이유 워딩 참고용, 같은 날 다른 기법 매매는 제외)
+      const pastTradesArr = trades.filter(t => t.id !== selected.id && !t.deletedAt && t.reason && !siblingTrades.some(s => s.id === t.id)).slice(0, 15);
       const pastTrades = pastTradesArr
         .map(t => `[ID:${t.id}] ${t.stock}(${t.date}, ${t.pnlRate}%, 기법:${t.technique || "-"}): ${t.reason?.slice(0, 100)}`).join('\n');
 
@@ -1332,15 +1340,15 @@ function JournalTab({ techniques }) {
 
       userContent.push({ type: "text", text:
         `[표기 규칙] 매매이유에서 괄호 안 숫자는 만원 단위임. 예: (+50)=+50만원 수익, (1000)=1000만원 매수금액, (-30)=-30만원 손실. "n만원"이라고 쓰지 않고 숫자만 씀.\n\n` +
-        `[현재 매매] 종목:${selected.stock} 날짜:${selected.date}${dayLabel} 수익률:${selected.pnlRate}% 적용기법:${selected.technique || "미지정"}\n` +
-        `매매이유: ${selected.reason}\n${selected.memo ? `메모: ${selected.memo}\n` : ""}\n` +
+        `[현재 매매] 종목:${selected.stock} 날짜:${selected.date}${dayLabel} 매수가:${selected.buyPrice || "-"} 매도가:${selected.sellPrice || "-"} 수익률:${selected.pnlRate}% 적용기법:${selected.technique || "미지정"}\n` +
+        `매매이유: ${selected.reason}\n${selected.memo ? `메모: ${selected.memo}\n` : ""}${siblingNote}\n` +
         `${imageNote}\n\n` +
         `[적용 기법 강의록 - 우선 참고]\n${techSummary || "(직접 매칭되는 강의록 없음)"}${techNote}\n\n` +
         `[기타 강의록 목록 - 위 기법에 없어도 이번 매매와 유사한 내용이 있는지 추가로 확인]\n${otherTechSummary || "(없음)"}\n\n` +
         `[동일 날짜(${selected.date}) 실전매매 기록]\n${liveSection}\n\n` +
         `[과거 유사 매매 - 매매이유 원문]\n${pastTrades || "(없음)"}\n\n` +
         `아래 항목을 분석:\n` +
-        `1. 기법 매칭: 이번 매매가 [적용 기법 강의록]의 진입조건/포지션/주의사항에 얼마나 부합하는지 (강의록 근거를 인용). [기타 강의록 목록]에 이번 매매와 더 유사한 내용이 있다면 함께 언급\n` +
+        `1. 기법 매칭: 매수가/매도가/수익률을 참고하여 이번 매매가 [적용 기법 강의록]의 진입조건/포지션/주의사항에 얼마나 부합하는지 (강의록 근거를 인용). [기타 강의록 목록]에 이번 매매와 더 유사한 내용이 있다면 함께 언급\n` +
         `2. 차트 분석: 첨부된 차트가 있다면 봉의 모양과 진입/이탈 시간대가 기법의 트리거·패턴 설명과 일치하는지 확인. 차트가 없거나 기법과 무관한 내용은 생략\n` +
         `3. 정답매매: 강의록 기법 기준 이상적 진입/손절/익절 시나리오 (실제 매매 아님). 금액은 같은 표기 규칙으로 괄호 안 숫자(만원) 표기, 퍼센트 금지\n` +
         `4. 잘된 점 / 개선할 점 (기법 부합도 중심)\n` +
