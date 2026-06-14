@@ -1275,14 +1275,76 @@ function JournalTab({ techniques }) {
     if (!selected?.reason) { setFeedback("❌ 매매 이유를 먼저 입력하세요."); return; }
     setDetailAiLoading(true); setDetailAiAnalysis("");
     try {
-      const techSummary = techniques.slice(0, 15).map(t =>
-        `[${t.name}] 카테고리:${t.category} / 매수조건:${t.entry?.condition} / 트리거:${t.pattern?.trigger}${t.rawInput ? ` / 원문:${t.rawInput}` : ''}`
-      ).join('\n');
+      // 1. 적용 기법과 관련된 강의록만 우선 선별 (기법에 포커스)
+      const group = techGroupOf(selected.technique);
+      const keywords = [...new Set([selected.technique, group, ...group.split("-")].filter(s => s && s.length >= 2))];
+      const relatedTechs = techniques.filter(t => {
+        const hay = `${t.name || ""} ${t.category || ""} ${(t.tags || []).join(" ")} ${t.rawInput || ""}`;
+        return keywords.some(k => hay.includes(k));
+      });
+      const techsToUse = relatedTechs.length ? relatedTechs : techniques.slice(0, 10);
+      const techSummary = techsToUse.map(t =>
+        `[${t.name}] 카테고리:${t.category} / 타임프레임:${t.timeframe || "-"}\n` +
+        `- 매수조건:${t.entry?.condition || "-"} / 포지션:${t.entry?.position || "-"} / 주의:${t.entry?.caution || "-"}\n` +
+        `- 패턴(진입전→트리거→진입후): ${t.pattern?.before || "-"} → ${t.pattern?.trigger || "-"} → ${t.pattern?.after || "-"}\n` +
+        `- 청산(수익/손실): ${t.exit?.profit || "-"} / ${t.exit?.loss || "-"}` +
+        (t.rawInput ? `\n- 원문: ${t.rawInput.slice(0, 500)}` : '')
+      ).join('\n\n');
+      const techNote = relatedTechs.length
+        ? ""
+        : "\n(주의: 이 매매의 기법(" + (selected.technique || "미지정") + ")과 직접 매칭되는 강의록을 찾지 못함. 위 목록은 참고용 일부 강의록이며, 기법 매칭이 안 된다는 점을 분석에 명시할 것.)";
+
+      // 2. 과거 유사 매매 (매매이유 워딩 참고용)
       const pastTradesArr = trades.filter(t => t.id !== selected.id && !t.deletedAt && t.reason).slice(0, 15);
       const pastTrades = pastTradesArr
-        .map(t => `[ID:${t.id}] ${t.stock}(${t.date}, ${t.pnlRate}%): ${t.reason?.slice(0, 80)}`).join('\n');
-      const result = await claude("주식 매매 분석 전문가. 핵심만 간결하게. [중요] '정답매매'는 사용자가 실제 실행한 매매가 아닌, 해당 기법 기준으로 올바르게 했어야 할 이상적 시나리오다. 절대 실제 매매 내용을 정답매매로 제시하지 않는다.",
-        `[표기 규칙] 매매이유에서 괄호 안 숫자는 만원 단위임. 예: (+50)=+50만원 수익, (1000)=1000만원 매수금액, (-30)=-30만원 손실. "n만원"이라고 쓰지 않고 숫자만 씀.\n\n[현재 매매] 종목:${selected.stock} 날짜:${selected.date} 수익률:${selected.pnlRate}%\n매매이유: ${selected.reason}\n\n[강의록 기법]\n${techSummary || "(없음)"}\n\n[과거 유사 매매 참고]\n${pastTrades || "(없음)"}\n\n아래 항목을 분석:\n1. 강의록 기법 매칭 (적용된 기법과 근거)\n2. 정답매매: 해당 기법 기준 이상적 매매 시나리오 (실제 내가 한 매매가 아닌, 기법대로라면 어떻게 매수/손절/익절해야 했는지). 금액은 같은 표기 규칙으로 괄호 안 숫자(만원)로 표기, 퍼센트 금지\n3. 현재 매매의 잘된 점 / 개선할 점\n4. 과거 유사 매매와 비교\n\n※ 응답 맨 마지막 줄에 과거 유사 매매 중 가장 유사한 것 최대 5개의 ID를 아래 형식으로만 출력(다른 텍스트 없이): SIMILAR:[id1,id2,...]`, 2200);
+        .map(t => `[ID:${t.id}] ${t.stock}(${t.date}, ${t.pnlRate}%, 기법:${t.technique || "-"}): ${t.reason?.slice(0, 100)}`).join('\n');
+
+      // 3. 동일 날짜 실전매매 내용/차트 참고
+      let liveSection = "(없음)";
+      const liveImageBlocks = [];
+      try {
+        const liveRows = await sbGetLiveTrades();
+        const liveMatches = liveRows.map(rowToLiveTrade).filter(t => t.date === selected.date);
+        if (liveMatches.length) {
+          liveSection = liveMatches.map(t => `[${t.stock}]${t.title ? ` ${t.title}` : ""}\n${(t.textContent || "").slice(0, 400)}`).join('\n---\n');
+          const sameStock = liveMatches.filter(t => matchStock(t.stock, selected.stock));
+          (sameStock.length ? sameStock : liveMatches).forEach(t =>
+            (t.images || []).slice(0, 2).forEach(b64 => liveImageBlocks.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } }))
+          );
+        }
+      } catch {}
+
+      // 4. 현재 매매 차트 + 첨부 이미지 안내
+      const userContent = [];
+      if (selected.chartImg) userContent.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: selected.chartImg } });
+      userContent.push(...liveImageBlocks);
+      const imageNote = (selected.chartImg || liveImageBlocks.length)
+        ? `[첨부 이미지]${selected.chartImg ? "\n- 이 매매의 차트 이미지 (캔들 모양, 진입/이탈 시간대 분석에 활용)" : ""}${liveImageBlocks.length ? `\n- 동일 날짜 실전매매 관련 이미지 ${liveImageBlocks.length}장` : ""}\n이미지에서 실제로 확인 가능한 내용만 사용하고, 기법 설명과 무관하거나 불확실한 내용은 언급하지 말 것.`
+        : `[첨부 이미지] 없음. 차트 기반 분석(봉 모양, 시간대 등)은 시도하지 말고 '차트 없음'으로만 명시할 것. 추측해서 지어내지 말 것.`;
+
+      const dayIdx = dayOfWeek(selected.date);
+      const dayLabel = dayIdx !== null ? `(${DAY_NAMES[dayIdx]})` : "";
+
+      userContent.push({ type: "text", text:
+        `[표기 규칙] 매매이유에서 괄호 안 숫자는 만원 단위임. 예: (+50)=+50만원 수익, (1000)=1000만원 매수금액, (-30)=-30만원 손실. "n만원"이라고 쓰지 않고 숫자만 씀.\n\n` +
+        `[현재 매매] 종목:${selected.stock} 날짜:${selected.date}${dayLabel} 수익률:${selected.pnlRate}% 적용기법:${selected.technique || "미지정"}\n` +
+        `매매이유: ${selected.reason}\n${selected.memo ? `메모: ${selected.memo}\n` : ""}\n` +
+        `${imageNote}\n\n` +
+        `[적용 기법 강의록]\n${techSummary || "(저장된 강의록 없음)"}${techNote}\n\n` +
+        `[동일 날짜(${selected.date}) 실전매매 기록]\n${liveSection}\n\n` +
+        `[과거 유사 매매 - 매매이유 원문]\n${pastTrades || "(없음)"}\n\n` +
+        `아래 항목을 분석:\n` +
+        `1. 기법 매칭: 이번 매매가 [적용 기법 강의록]의 진입조건/포지션/주의사항에 얼마나 부합하는지 (강의록 근거를 인용)\n` +
+        `2. 차트 분석: 첨부된 차트가 있다면 봉의 모양과 진입/이탈 시간대가 기법의 트리거·패턴 설명과 일치하는지 확인. 차트가 없거나 기법과 무관한 내용은 생략\n` +
+        `3. 정답매매: 강의록 기법 기준 이상적 진입/손절/익절 시나리오 (실제 매매 아님). 금액은 같은 표기 규칙으로 괄호 안 숫자(만원) 표기, 퍼센트 금지\n` +
+        `4. 잘된 점 / 개선할 점 (기법 부합도 중심)\n` +
+        `5. 동일 날짜 실전매매와의 연관성 (시장 상황 등 참고할 점이 있다면)\n` +
+        `6. 과거 유사 매매 비교: 매매이유에 등장한 워딩(표현)이 이번 매매와 얼마나 비슷한지\n\n` +
+        `※ 응답 맨 마지막 줄에 과거 유사 매매 중 가장 유사한 것 최대 5개의 ID를 아래 형식으로만 출력(다른 텍스트 없이): SIMILAR:[id1,id2,...]`
+      });
+
+      const result = await claude("주식 매매 분석 전문가. 핵심만 간결하게. 분석은 반드시 [적용 기법 강의록] 내용에 근거하고, 강의록에 없는 내용을 일반론으로 단정하지 않는다. 차트 이미지가 없으면 차트 관련 내용을 지어내지 않는다. 차트에서 보이는 내용이 기법 설명과 무관하면 무시한다. [중요] '정답매매'는 사용자가 실제 실행한 매매가 아닌, 해당 기법 기준으로 올바르게 했어야 할 이상적 시나리오다. 절대 실제 매매 내용을 정답매매로 제시하지 않는다.",
+        userContent, 2800);
       // 응답 끝에서 SIMILAR:[...] 추출
       const simMatch = result.match(/SIMILAR:\[([\d,\s]*)\]/);
       const analysisText = result.replace(/\n?SIMILAR:\[[\d,\s]*\]\s*$/, '').trim();
