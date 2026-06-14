@@ -86,11 +86,13 @@ const rowToTrade = (r) => ({ id: r.id, stock: r.stock, date: r.date, buyPrice: r
 const TRADE_CATEGORIES = [
   "상따",
   "양봉종배",
-  "음봉종배",
-  "상한가하락시작",
+  "음봉매매-시초",
+  "음봉매매-종배",
+  "상한가하락시작-시초",
   "장중매매-돌파",
   "장중매매-눌림지지",
-  "장중매매-투매",
+  "투매-시초",
+  "투매-종가",
   "투경해제",
   "단기과열",
   "무증매매",
@@ -98,15 +100,39 @@ const TRADE_CATEGORIES = [
   "기타",
 ];
 
+// 매매 카테고리를 기법군(예: "투매")과 진입시점(예: "시초")으로 분리
+const TIMING_SUFFIXES = ["시초", "종배", "종가"];
+const techGroupOf = (technique) => {
+  if (!technique) return "미분류";
+  const i = technique.lastIndexOf("-");
+  if (i === -1) return technique;
+  return TIMING_SUFFIXES.includes(technique.slice(i + 1)) ? technique.slice(0, i) : technique;
+};
+const techTimingOf = (technique) => {
+  if (!technique) return "기타";
+  const i = technique.lastIndexOf("-");
+  if (i === -1) return "기타";
+  const suffix = technique.slice(i + 1);
+  return TIMING_SUFFIXES.includes(suffix) ? suffix : "기타";
+};
+const DAY_NAMES = ["일", "월", "화", "수", "목", "금", "토"];
+const dayOfWeek = (dateStr) => {
+  if (!dateStr) return null;
+  const [y, m, d] = dateStr.split("-").map(Number);
+  if (!y || !m || !d) return null;
+  return new Date(y, m - 1, d).getDay();
+};
+
 // ==================== 공통 유틸 ====================
 const categoryColor = (cat) => {
   if (!cat) return "#7f8c8d";
   if (cat.startsWith("장중매매")) return "#2980b9";
+  if (cat.startsWith("음봉매매")) return "#8e44ad";
+  if (cat.startsWith("투매")) return "#2980b9";
+  if (cat.startsWith("상한가하락시작")) return "#c0392b";
   return ({
     "상따": "#e74c3c",
     "양봉종배": "#e67e22",
-    "음봉종배": "#8e44ad",
-    "상한가하락시작": "#c0392b",
     "투경해제": "#27ae60",
     "단기과열": "#f39c12",
     "무증매매": "#16a085",
@@ -643,6 +669,7 @@ function LectureTab() {
   const [editRaw, setEditRaw] = useState("");
   const [feedback, setFeedback] = useState("");
   const [view, setView] = useState("list");
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -767,18 +794,28 @@ function LectureTab() {
 
       {!loading && view === "detail" && selected && (
         <div>
-          <button onClick={() => { setView("list"); setSelected(null); setEditMode(false); setFeedback(""); }}
+          <button onClick={() => { setView("list"); setSelected(null); setEditMode(false); setFeedback(""); setDeleteConfirm(false); }}
             style={{ background: "none", border: "none", color: "#4f8ef7", cursor: "pointer", fontSize: 13, marginBottom: 12 }}>← 목록</button>
           {!editMode ? (
             <div style={box}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
                 <span style={{ background: categoryColor(selected.category), color: "#fff", fontSize: 11, padding: "2px 7px", borderRadius: 4 }}>{selected.category}</span>
                 <span style={{ fontSize: 17, fontWeight: 700 }}>{selected.name}</span>
-                <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
                   <button onClick={() => { setEditJson(JSON.stringify(selected, null, 2)); setEditRaw(selected.rawInput || ""); setEditSubMode("raw"); setEditMode(true); }}
                     style={{ padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>수정</button>
-                  <button onClick={() => handleDelete(selected.id)}
-                    style={{ padding: "4px 10px", background: "#3a1a1a", border: "none", color: "#e74c3c", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>삭제</button>
+                  {deleteConfirm ? (
+                    <>
+                      <span style={{ fontSize: 12, color: "#e74c3c" }}>삭제하시겠습니까?</span>
+                      <button onClick={() => handleDelete(selected.id)}
+                        style={{ padding: "4px 10px", background: "#e74c3c", color: "#fff", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>확인</button>
+                      <button onClick={() => setDeleteConfirm(false)}
+                        style={{ padding: "4px 10px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>취소</button>
+                    </>
+                  ) : (
+                    <button onClick={() => setDeleteConfirm(true)}
+                      style={{ padding: "4px 10px", background: "#3a1a1a", border: "none", color: "#e74c3c", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>삭제</button>
+                  )}
                 </div>
               </div>
               {[["📌 매수 조건", selected.entry?.condition], ["📍 매수 위치", selected.entry?.position],
@@ -1455,7 +1492,8 @@ function JournalTab({ techniques }) {
     try {
       await sbUpsert("trades", [tradeToRow(dup)]);
       setTrades(p => [dup, ...p]);
-      setFeedback("✅ 복제됨"); setView("list"); setSelected(null);
+      setSelected(dup); setEditForm({ ...dup }); setEditTrade(true); setView("detail");
+      setFeedback("✅ 복제됨 - 날짜를 변경하세요"); setDeleteConfirmId(null);
     } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
 
@@ -2160,7 +2198,7 @@ function JournalTab({ techniques }) {
                 </div>
                 <div>
                   <div style={label11}>날짜</div>
-                  <input type="date" value={editForm.date || ""} onChange={e => setEditForm(p => ({ ...p, date: e.target.value }))}
+                  <input type="date" value={editForm.date || ""} onChange={e => setEditForm(p => ({ ...p, date: e.target.value }))} autoFocus
                     style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box", colorScheme: "dark" }} />
                 </div>
                 {[["buyPrice","매수가","numcomma"],["sellPrice","매도가","numcomma"],["amount","매입금액","numcomma"],["pnl","실현손익","numcomma"],["pnlRate","수익률 (%)","number"]].map(([f,p,t]) => {
@@ -2769,13 +2807,23 @@ function RealTradeTab() {
 }
 
 // ==================== 통계 탭 ====================
+const StatRow = ({ label, v }) => (
+  <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: "1px solid #2a2d3a" }}>
+    <span style={{ fontSize: 13, flex: 1, textAlign: "left" }}>{label}</span>
+    <span style={{ fontSize: 12, color: "#777" }}>{v.total}건</span>
+    <span style={{ fontSize: 12, color: v.wins / v.total >= 0.5 ? "#4caf50" : "#e74c3c" }}>{((v.wins / v.total) * 100).toFixed(0)}%</span>
+    <span style={{ fontSize: 13, fontWeight: 600, color: pnlColor(v.pnl) }}>{v.pnl.toLocaleString()}원</span>
+  </div>
+);
+
 function StatsTab() {
   const [trades, setTrades] = useState([]);
   const [loading, setLoading] = useState(true);
-  const isMobile = useIsMobile();
+  const [subTab, setSubTab] = useState("overview");
+  const [groupMode, setGroupMode] = useState("detail");
 
   useEffect(() => {
-    sbGet("trades").then(rows => { setTrades(rows.map(rowToTrade)); setLoading(false); }).catch(() => setLoading(false));
+    sbGetTrades().then(rows => { setTrades(rows.map(rowToTrade).filter(t => !t.isWatched)); setLoading(false); }).catch(() => setLoading(false));
   }, []);
 
   if (loading) return <div style={{ color: "#555", padding: 40, textAlign: "center" }}>로딩 중...</div>;
@@ -2786,19 +2834,23 @@ function StatsTab() {
   const totalPnl = trades.reduce((s, t) => s + (parseFloat(t.pnl) || 0), 0);
   const avgRate = (trades.reduce((s, t) => s + (parseFloat(t.pnlRate) || 0), 0) / total).toFixed(2);
 
-  const byTech = {};
-  trades.forEach(t => {
-    const k = t.technique || "미분류";
-    if (!byTech[k]) byTech[k] = { total: 0, wins: 0, pnl: 0 };
-    byTech[k].total++; if (parseFloat(t.pnlRate) > 0) byTech[k].wins++; byTech[k].pnl += parseFloat(t.pnl) || 0;
-  });
+  const aggregate = (keyFn) => {
+    const m = {};
+    trades.forEach(t => {
+      const k = keyFn(t);
+      if (!m[k]) m[k] = { total: 0, wins: 0, pnl: 0 };
+      m[k].total++; if (parseFloat(t.pnlRate) > 0) m[k].wins++; m[k].pnl += parseFloat(t.pnl) || 0;
+    });
+    return m;
+  };
 
-  const byMonth = {};
-  trades.forEach(t => {
-    const m = (t.date || "").slice(0, 7); if (!m) return;
-    if (!byMonth[m]) byMonth[m] = { total: 0, wins: 0, pnl: 0 };
-    byMonth[m].total++; if (parseFloat(t.pnlRate) > 0) byMonth[m].wins++; byMonth[m].pnl += parseFloat(t.pnl) || 0;
-  });
+  const SUB_TABS = [
+    ["overview", "개요"],
+    ["technique", "기법별"],
+    ["monthly", "월별"],
+    ["weekday", "요일별"],
+    ["stock", "종목별"],
+  ];
 
   return (
     <div style={{ color: "#e0e0e0" }}>
@@ -2812,30 +2864,91 @@ function StatsTab() {
           </div>
         ))}
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
-        <div style={box}>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>기법별 통계</div>
-          {Object.entries(byTech).map(([k, v]) => (
-            <div key={k} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: "1px solid #2a2d3a" }}>
-              <span style={{ fontSize: 13, flex: 1, textAlign: "left" }}>{k}</span>
-              <span style={{ fontSize: 12, color: "#777" }}>{v.total}건</span>
-              <span style={{ fontSize: 12, color: v.wins/v.total >= 0.5 ? "#4caf50" : "#e74c3c" }}>{((v.wins/v.total)*100).toFixed(0)}%</span>
-              <span style={{ fontSize: 13, fontWeight: 600, color: pnlColor(v.pnl) }}>{v.pnl.toLocaleString()}원</span>
-            </div>
-          ))}
-        </div>
-        <div style={box}>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>월별 통계</div>
-          {Object.entries(byMonth).sort((a,b) => b[0].localeCompare(a[0])).map(([m, v]) => (
-            <div key={m} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: "1px solid #2a2d3a" }}>
-              <span style={{ fontSize: 13, flex: 1, textAlign: "left" }}>{m}</span>
-              <span style={{ fontSize: 12, color: "#777" }}>{v.total}건</span>
-              <span style={{ fontSize: 12, color: v.wins/v.total >= 0.5 ? "#4caf50" : "#e74c3c" }}>{((v.wins/v.total)*100).toFixed(0)}%</span>
-              <span style={{ fontSize: 13, fontWeight: 600, color: pnlColor(v.pnl) }}>{v.pnl.toLocaleString()}원</span>
-            </div>
-          ))}
-        </div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+        {SUB_TABS.map(([k, lbl]) => (
+          <button key={k} onClick={() => setSubTab(k)}
+            style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: subTab === k ? "#4f8ef7" : "#2a2d3a", color: subTab === k ? "#fff" : "#aaa" }}>{lbl}</button>
+        ))}
       </div>
+
+      {subTab === "overview" && (() => {
+        const recent = [...trades].sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.id - a.id).slice(0, 10);
+        return (
+          <div style={box}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>최근 매매 10건</div>
+            {recent.map(t => (
+              <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: "1px solid #2a2d3a" }}>
+                <span style={{ fontSize: 12, color: "#666", width: 80 }}>{t.date}</span>
+                <span style={{ fontSize: 13, fontWeight: 600 }}>{t.stock}</span>
+                {t.technique && <span style={{ background: categoryColor(t.technique), fontSize: 11, padding: "2px 7px", borderRadius: 4, color: "#fff" }}>{t.technique}</span>}
+                <span style={{ marginLeft: "auto", fontSize: 13, fontWeight: 600, color: pnlColor(parseFloat(t.pnlRate)) }}>{parseFloat(t.pnlRate) > 0 ? "+" : ""}{t.pnlRate}%</span>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
+
+      {subTab === "technique" && (() => {
+        const byTech = aggregate(t => {
+          const tech = t.technique || "미분류";
+          if (groupMode === "group") return techGroupOf(tech);
+          if (groupMode === "timing") return techTimingOf(tech);
+          return tech;
+        });
+        const entries = Object.entries(byTech).sort((a, b) => b[1].pnl - a[1].pnl);
+        return (
+          <div style={box}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>기법별 통계</div>
+              <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                {[["detail", "세부기법"], ["group", "기법군"], ["timing", "진입시점"]].map(([k, lbl]) => (
+                  <button key={k} onClick={() => setGroupMode(k)}
+                    style={{ padding: "3px 10px", borderRadius: 5, border: "none", cursor: "pointer", fontSize: 11, background: groupMode === k ? "#4f8ef7" : "#2a2d3a", color: groupMode === k ? "#fff" : "#aaa" }}>{lbl}</button>
+                ))}
+              </div>
+            </div>
+            {entries.map(([k, v]) => <StatRow key={k} label={k} v={v} />)}
+          </div>
+        );
+      })()}
+
+      {subTab === "monthly" && (() => {
+        const byMonth = aggregate(t => (t.date || "").slice(0, 7) || "날짜없음");
+        const entries = Object.entries(byMonth).sort((a, b) => b[0].localeCompare(a[0]));
+        return (
+          <div style={box}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>월별 통계</div>
+            {entries.map(([k, v]) => <StatRow key={k} label={k} v={v} />)}
+          </div>
+        );
+      })()}
+
+      {subTab === "weekday" && (() => {
+        const byDay = aggregate(t => {
+          const d = dayOfWeek(t.date);
+          return d === null ? "날짜없음" : DAY_NAMES[d];
+        });
+        const order = ["월", "화", "수", "목", "금", "토", "일", "날짜없음"];
+        const entries = order.filter(k => byDay[k]).map(k => [k, byDay[k]]);
+        return (
+          <div style={box}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>요일별 통계</div>
+            {entries.map(([k, v]) => <StatRow key={k} label={k} v={v} />)}
+          </div>
+        );
+      })()}
+
+      {subTab === "stock" && (() => {
+        const byStock = aggregate(t => t.stock || "종목없음");
+        const entries = Object.entries(byStock).sort((a, b) => b[1].pnl - a[1].pnl);
+        return (
+          <div style={box}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>종목별 통계 (손익순)</div>
+            {entries.map(([k, v]) => <StatRow key={k} label={k} v={v} />)}
+          </div>
+        );
+      })()}
     </div>
   );
 }
