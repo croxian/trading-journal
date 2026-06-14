@@ -815,10 +815,16 @@ function JournalTab({ techniques }) {
   const pasteZoneRef = useRef(null);
   const tradesRef = useRef([]);
   const selectedRef = useRef(null);
+  const detailOriginTabRef = useRef("trades");
   const scrollTargetRef = useScrollRestore(view);
   const isMobile = useIsMobile();
 
   useEffect(() => { selectedRef.current = selected; }, [selected]);
+
+  // 상세보기로 들어가기 전 보고 있던 탭을 기억해, 목록/뒤로가기 시 그 탭으로 복귀
+  useEffect(() => {
+    if (view !== "detail") detailOriginTabRef.current = listTab;
+  }, [listTab, view]);
 
   useEffect(() => {
     if (view === "add" && (inputMode === "img0606" || inputMode === "img0397")) {
@@ -877,6 +883,7 @@ function JournalTab({ techniques }) {
         }
       } else {
         if (selectedRef.current) scrollTargetRef.current = `trade-row-${selectedRef.current.id}`;
+        setListTab(detailOriginTabRef.current);
         setView("list"); setSelected(null); setEditTrade(false); setFeedback(""); setDetailAiAnalysis(""); setSimilarTrades([]);
       }
     };
@@ -2019,6 +2026,7 @@ function JournalTab({ techniques }) {
             <button onClick={() => {
               window.history.replaceState({ ...(window.history.state || {}), journalView: "list" }, "");
               if (selected) scrollTargetRef.current = `trade-row-${selected.id}`;
+              setListTab(detailOriginTabRef.current);
               setView("list"); setSelected(null); setEditTrade(false); setFeedback(""); setDetailAiAnalysis(""); setSimilarTrades([]);
             }} style={{ background: "none", border: "none", color: "#4f8ef7", cursor: "pointer", fontSize: 13 }}>← 목록</button>
             <span style={{ flex: 1 }} />
@@ -2043,14 +2051,14 @@ function JournalTab({ techniques }) {
                     const updated = { ...selected, isWatched: false };
                     await sbUpsert("trades", [tradeToRow(updated)]);
                     setTrades(p => p.map(t => t.id === selected.id ? updated : t));
-                    setSelected(updated); setListTab("trades"); setFeedback("✅ 매매로 전환됨");
+                    setSelected(updated); setFeedback("✅ 매매로 전환됨");
                   }} style={{ padding: "4px 10px", background: "#27ae60", border: "none", color: "#fff", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>매매로 전환</button>
                 ) : (
                   <button onClick={async () => {
                     const updated = { ...selected, isWatched: true };
                     await sbUpsert("trades", [tradeToRow(updated)]);
                     setTrades(p => p.map(t => t.id === selected.id ? updated : t));
-                    setSelected(updated); setListTab("watchlist"); setFeedback("✅ 관심종목으로 이동됨");
+                    setSelected(updated); setFeedback("✅ 관심종목으로 이동됨");
                   }} style={{ padding: "4px 10px", background: "#7a6000", border: "none", color: "#f39c12", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>관심종목으로</button>
                 )}
                 <button onClick={() => { setEditForm({ ...selected }); setEditTrade(true); setFeedback(""); setDeleteConfirmId(null); }}
