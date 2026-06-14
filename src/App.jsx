@@ -2173,9 +2173,9 @@ function JournalTab({ techniques }) {
                   const tl = fillMergedStockCells(Array.isArray(p) ? p : (p.trades || []));
                   const rowCountWarn = (!Array.isArray(p) && p.rowCount && p.rowCount !== tl.length) ? ` ⚠️ 행 개수 불일치(이미지 ${p.rowCount}행 vs 추출 ${tl.length}행) - 다시 시도해보세요` : "";
                   const matches = editForm?.stock ? tl.filter(t => matchStock(t.stock, editForm.stock)) : [];
-                  const m = merge0397Rows(matches.length > 0 ? matches : tl.slice(0, 1));
+                  const m = merge0397Rows(matches.length > 0 ? matches : (editForm?.stock ? [] : tl.slice(0, 1)));
                   if (m) { setEditForm(f => ({ ...f, buyPrice: m.buyPrice ?? f.buyPrice, sellPrice: m.sellPrice ?? f.sellPrice, pnl: m.pnl ?? f.pnl, pnlRate: m.pnlRate ?? f.pnlRate, amount: m.buyAmount ?? f.amount })); setFeedback((matches.length > 1 ? `✅ ${matches.length}건 머지됨` : "✅ 재무 데이터 채워짐") + rowCountWarn); }
-                  else setFeedback(`❌ 매칭 종목 없음${rowCountWarn}`);
+                  else setFeedback(`❌ '${editForm?.stock || ""}' 매칭 종목 없음 (추출: ${tl.map(t => t.stock).join(", ")})${rowCountWarn}`);
                 } catch (err) { setFeedback(`❌ ${err.message}`); }
                 setEditImgLoading(false);
               }
@@ -2202,9 +2202,9 @@ function JournalTab({ techniques }) {
                         const { trades, rowCount } = await extract0397Trades(f);
                         const rowCountWarn = (rowCount && rowCount !== trades.length) ? ` ⚠️ 행 개수 불일치(이미지 ${rowCount}행 vs 추출 ${trades.length}행) - 다시 시도해보세요` : "";
                         const matches = editForm?.stock ? trades.filter(t => matchStock(t.stock, editForm.stock)) : [];
-                        const m = merge0397Rows(matches.length > 0 ? matches : trades.slice(0, 1));
+                        const m = merge0397Rows(matches.length > 0 ? matches : (editForm?.stock ? [] : trades.slice(0, 1)));
                         if (m) { setEditForm(prev => ({ ...prev, buyPrice: m.buyPrice ?? prev.buyPrice, sellPrice: m.sellPrice ?? prev.sellPrice, pnl: m.pnl ?? prev.pnl, pnlRate: m.pnlRate ?? prev.pnlRate, amount: m.buyAmount ?? prev.amount })); setFeedback((matches.length > 1 ? `✅ ${matches.length}건 머지됨` : "✅ 재무 데이터 채워짐") + rowCountWarn); }
-                        else setFeedback(`❌ 매칭 없음${rowCountWarn}`);
+                        else setFeedback(`❌ '${editForm?.stock || ""}' 매칭 없음 (추출: ${trades.map(t => t.stock).join(", ")})${rowCountWarn}`);
                       } catch (err) { setFeedback(`❌ ${err.message}`); }
                       setEditImgLoading(false); e.target.value = "";
                     }} />
