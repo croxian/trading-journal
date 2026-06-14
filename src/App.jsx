@@ -908,6 +908,7 @@ function JournalTab({ techniques }) {
   const [pptFilter, setPptFilter] = useState("all");
   const [editPasteMode, setEditPasteMode] = useState("0606");
   const [groupByDate, setGroupByDate] = useState(false);
+  const [scrollToDate, setScrollToDate] = useState(null);
   const [detailAiAnalysis, setDetailAiAnalysis] = useState("");
   const [detailAiLoading, setDetailAiLoading] = useState(false);
   const [similarTrades, setSimilarTrades] = useState([]);
@@ -931,6 +932,19 @@ function JournalTab({ techniques }) {
       pasteZoneRef.current?.focus();
     }
   }, [view, inputMode]);
+
+  // 날짜 이동: 날짜별 보기로 전환 후 해당 날짜 섹션으로 스크롤
+  useEffect(() => {
+    if (!scrollToDate) return;
+    const el = document.getElementById(`date-sec-${scrollToDate}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+      setFeedback("");
+    } else {
+      setFeedback(`❌ ${scrollToDate} 매매 기록 없음`);
+    }
+    setScrollToDate(null);
+  }, [scrollToDate, trades, groupByDate]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1493,7 +1507,7 @@ function JournalTab({ techniques }) {
       await sbUpsert("trades", [tradeToRow(dup)]);
       setTrades(p => [dup, ...p]);
       setSelected(dup); setEditForm({ ...dup }); setEditTrade(true); setView("detail");
-      setFeedback("✅ 복제됨 - 날짜를 변경하세요"); setDeleteConfirmId(null);
+      setFeedback("✅ 복제됨"); setDeleteConfirmId(null);
     } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
 
@@ -1543,6 +1557,17 @@ function JournalTab({ techniques }) {
         )}
         <button onClick={() => setGroupByDate(p => !p)}
           style={{ padding: "4px 10px", background: groupByDate ? "#4f8ef7" : "#2a2d3a", border: "none", color: groupByDate ? "#fff" : "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>📅 날짜별</button>
+        {view === "list" && !selected && listTab !== "trash" && (
+          <input type="date" onChange={e => {
+            const v = e.target.value;
+            if (!v) return;
+            setGroupByDate(true);
+            setScrollToDate(v);
+            e.target.value = "";
+          }}
+            style={{ background: "#2a2d3a", border: "none", borderRadius: 5, color: "#aaa", padding: "4px 8px", fontSize: 12, colorScheme: "dark", cursor: "pointer" }}
+            title="날짜로 이동" />
+        )}
         {view === "list" && !selected && listTab !== "trash" && (() => {
           const allTechs = [...new Set(trades.filter(t => !t.isWatched && t.technique).map(t => t.technique))].sort();
           return (
@@ -1985,7 +2010,7 @@ function JournalTab({ techniques }) {
           <div style={{ display: "grid", gap: 4 }}>
             {SelectBar}
             {sortedDates.map(date => (
-              <div key={date}>
+              <div key={date} id={`date-sec-${date}`}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 2px", borderBottom: "1px solid #2a2d3a", marginBottom: 6 }}>
                   <span style={{ fontSize: 12, fontWeight: 600, color: isWatch ? "#f39c12" : "#4f8ef7" }}>📅 {date}</span>
                   <span style={{ fontSize: 11, color: "#555" }}>{grouped[date].length}건</span>
@@ -2198,7 +2223,7 @@ function JournalTab({ techniques }) {
                 </div>
                 <div>
                   <div style={label11}>날짜</div>
-                  <input type="date" value={editForm.date || ""} onChange={e => setEditForm(p => ({ ...p, date: e.target.value }))} autoFocus
+                  <input type="date" value={editForm.date || ""} onChange={e => setEditForm(p => ({ ...p, date: e.target.value }))}
                     style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box", colorScheme: "dark" }} />
                 </div>
                 {[["buyPrice","매수가","numcomma"],["sellPrice","매도가","numcomma"],["amount","매입금액","numcomma"],["pnl","실현손익","numcomma"],["pnlRate","수익률 (%)","number"]].map(([f,p,t]) => {
