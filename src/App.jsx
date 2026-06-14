@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
 import JSZip from "jszip";
 import * as XLSX from "xlsx";
 
@@ -380,6 +380,19 @@ const useIsMobile = () => {
   return w < 640;
 };
 
+// 상세보기에서 목록으로 돌아갈 때, 직전에 보던 항목이 화면 맨 위에 보이도록 스크롤 위치 복원
+const useScrollRestore = (view) => {
+  const targetIdRef = useRef(null);
+  useLayoutEffect(() => {
+    if (view !== "list" || !targetIdRef.current) return;
+    const id = targetIdRef.current;
+    targetIdRef.current = null;
+    const el = document.getElementById(id);
+    if (el) el.scrollIntoView({ behavior: "auto", block: "start" });
+  }, [view]);
+  return targetIdRef;
+};
+
 // ==================== 대시보드 탭 ====================
 function DashboardTab({ onNavigate }) {
   const [trades, setTrades] = useState([]);
@@ -670,6 +683,7 @@ function LectureTab() {
   const [feedback, setFeedback] = useState("");
   const [view, setView] = useState("list");
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const scrollTargetRef = useScrollRestore(view);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -774,7 +788,7 @@ function LectureTab() {
           ? <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>저장된 기법 없음</div>
           : <div style={{ display: "grid", gap: 10 }}>
             {techniques.map(t => (
-              <div key={t.id} onClick={() => { setSelected(t); setView("detail"); setFeedback(""); }}
+              <div key={t.id} id={`tech-row-${t.id}`} onClick={() => { setSelected(t); setView("detail"); setFeedback(""); }}
                 style={{ ...box, cursor: "pointer" }}
                 onMouseEnter={e => e.currentTarget.style.borderColor = "#4f8ef7"}
                 onMouseLeave={e => e.currentTarget.style.borderColor = "#2a2d3a"}>
@@ -794,7 +808,7 @@ function LectureTab() {
 
       {!loading && view === "detail" && selected && (
         <div>
-          <button onClick={() => { setView("list"); setSelected(null); setEditMode(false); setFeedback(""); setDeleteConfirm(false); }}
+          <button onClick={() => { if (selected) scrollTargetRef.current = `tech-row-${selected.id}`; setView("list"); setSelected(null); setEditMode(false); setFeedback(""); setDeleteConfirm(false); }}
             style={{ background: "none", border: "none", color: "#4f8ef7", cursor: "pointer", fontSize: 13, marginBottom: 12 }}>← 목록</button>
           {!editMode ? (
             <div style={box}>
@@ -925,7 +939,11 @@ function JournalTab({ techniques }) {
   const [showTechDrop, setShowTechDrop] = useState(false);
   const pasteZoneRef = useRef(null);
   const tradesRef = useRef([]);
+  const selectedRef = useRef(null);
+  const scrollTargetRef = useScrollRestore(view);
   const isMobile = useIsMobile();
+
+  useEffect(() => { selectedRef.current = selected; }, [selected]);
 
   useEffect(() => {
     if (view === "add" && (inputMode === "img0606" || inputMode === "img0397")) {
@@ -938,7 +956,7 @@ function JournalTab({ techniques }) {
     if (!scrollToDate) return;
     const el = document.getElementById(`date-sec-${scrollToDate}`);
     if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "start" });
+      el.scrollIntoView({ behavior: "auto", block: "start" });
       setFeedback("");
     } else {
       setFeedback(`❌ ${scrollToDate} 매매 기록 없음`);
@@ -983,6 +1001,7 @@ function JournalTab({ techniques }) {
           sbGetChartImg(t.id).then(img => setSelected(p => p?.id === t.id ? { ...p, chartImg: img } : p)).finally(() => setDetailImgLoading(false));
         }
       } else {
+        if (selectedRef.current) scrollTargetRef.current = `trade-row-${selectedRef.current.id}`;
         setView("list"); setSelected(null); setEditTrade(false); setFeedback(""); setDetailAiAnalysis(""); setSimilarTrades([]);
       }
     };
@@ -2042,7 +2061,7 @@ function JournalTab({ techniques }) {
         const TradeRow = (t) => {
           const checked = selectedIds.has(t.id);
           return (
-            <div key={t.id}
+            <div key={t.id} id={`trade-row-${t.id}`}
               onClick={() => selectMode ? toggleSelect(t.id) : openDetail(t)}
               style={{ ...box, cursor: "pointer", borderColor: checked ? "#e74c3c" : isWatch ? "#3a3a2a" : "#2a2d3a", background: checked ? "#2a1a1a" : "#1a1d27" }}
               onMouseEnter={e => { if (!checked) e.currentTarget.style.borderColor = isWatch ? "#f39c12" : "#4f8ef7"; }}
@@ -2109,6 +2128,7 @@ function JournalTab({ techniques }) {
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
             <button onClick={() => {
               window.history.replaceState({ ...(window.history.state || {}), journalView: "list" }, "");
+              if (selected) scrollTargetRef.current = `trade-row-${selected.id}`;
               setView("list"); setSelected(null); setEditTrade(false); setFeedback(""); setDetailAiAnalysis(""); setSimilarTrades([]);
             }} style={{ background: "none", border: "none", color: "#4f8ef7", cursor: "pointer", fontSize: 13 }}>← 목록</button>
             <span style={{ flex: 1 }} />
@@ -2427,8 +2447,11 @@ function RealTradeTab() {
   const [contentTab, setContentTab] = useState("summary");
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [aiSummary, setAiSummary] = useState("");
+  const [groupByDate, setGroupByDate] = useState(false);
+  const [scrollToDate, setScrollToDate] = useState(null);
   const imgPasteRef = useRef(null);
   const editImgPasteRef = useRef(null);
+  const scrollTargetRef = useScrollRestore(view);
   const isMobile = useIsMobile();
 
   const load = useCallback(async () => {
@@ -2440,6 +2463,19 @@ function RealTradeTab() {
     setLoading(false);
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  // 날짜 이동: 날짜별 보기로 전환 후 해당 날짜 섹션으로 스크롤
+  useEffect(() => {
+    if (!scrollToDate) return;
+    const el = document.getElementById(`date-sec-${scrollToDate}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "auto", block: "start" });
+      setFeedback("");
+    } else {
+      setFeedback(`❌ ${scrollToDate} 매매 기록 없음`);
+    }
+    setScrollToDate(null);
+  }, [scrollToDate, lTrades, groupByDate]);
 
   const calcSimilar = (trade, all) => {
     const src = trade.textContent || "";
@@ -2559,11 +2595,24 @@ function RealTradeTab() {
 
   return (
     <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center" }}>
-        <button onClick={() => { setView("list"); setSelected(null); setFeedback(""); }}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+        <button onClick={() => { if (selected) scrollTargetRef.current = `live-row-${selected.id}`; setView("list"); setSelected(null); setFeedback(""); }}
           style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: view === "list" && !selected ? "#e74c3c" : "#2a2d3a", color: view === "list" && !selected ? "#fff" : "#aaa" }}>
           📋 목록 ({lTrades.length})
         </button>
+        <button onClick={() => setGroupByDate(p => !p)}
+          style={{ padding: "4px 10px", background: groupByDate ? "#e74c3c" : "#2a2d3a", border: "none", color: groupByDate ? "#fff" : "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>📅 날짜별</button>
+        {view === "list" && !selected && (
+          <input type="date" onChange={e => {
+            const v = e.target.value;
+            if (!v) return;
+            setGroupByDate(true);
+            setScrollToDate(v);
+            e.target.value = "";
+          }}
+            style={{ background: "#2a2d3a", border: "none", borderRadius: 5, color: "#aaa", padding: "4px 8px", fontSize: 12, colorScheme: "dark", cursor: "pointer" }}
+            title="날짜로 이동" />
+        )}
         <button onClick={() => { if (view === "add") return; setView("add"); setSelected(null); setFeedback(""); setForm({ title: "", stock: "", date: "", textContent: "", images: [] }); }}
           style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: view === "add" ? "#e74c3c" : "#2a2d3a", color: view === "add" ? "#fff" : "#aaa" }}>
           추가
@@ -2637,44 +2686,58 @@ function RealTradeTab() {
         </div>
       )}
 
-      {!loading && view === "list" && !selected && (
-        lTrades.length === 0
-          ? <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>실전매매 기록 없음</div>
-          : <div style={{ display: "grid", gap: 8 }}>
-            {lTrades.map(t => (
-              <div key={t.id} onClick={() => openDetail(t)}
-                style={{ ...box, cursor: "pointer" }}
-                onMouseEnter={e => e.currentTarget.style.borderColor = "#e74c3c"}
-                onMouseLeave={e => e.currentTarget.style.borderColor = "#2a2d3a"}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontWeight: 700 }}>{t.title || t.stock || "제목 없음"}</span>
-                  <span style={{ fontSize: 12, color: "#666" }}>{t.date}</span>
-                  {t.images?.length > 0 && <span style={{ fontSize: 11, color: "#555" }}>🖼️ {t.images.length}장</span>}
-                  {t.aiAnalysis && <span style={{ fontSize: 11, color: "#8e44ad" }}>🤖</span>}
+      {!loading && view === "list" && !selected && (() => {
+        if (lTrades.length === 0) return <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>실전매매 기록 없음</div>;
+        const TradeRow = (t) => (
+          <div key={t.id} id={`live-row-${t.id}`} onClick={() => openDetail(t)}
+            style={{ ...box, cursor: "pointer" }}
+            onMouseEnter={e => e.currentTarget.style.borderColor = "#e74c3c"}
+            onMouseLeave={e => e.currentTarget.style.borderColor = "#2a2d3a"}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontWeight: 700 }}>{t.title || t.stock || "제목 없음"}</span>
+              {!groupByDate && <span style={{ fontSize: 12, color: "#666" }}>{t.date}</span>}
+              {t.images?.length > 0 && <span style={{ fontSize: 11, color: "#555" }}>🖼️ {t.images.length}장</span>}
+              {t.aiAnalysis && <span style={{ fontSize: 11, color: "#8e44ad" }}>🤖</span>}
+            </div>
+            {t.stock && (
+              <div style={{ marginTop: 4, display: "flex", flexWrap: "wrap", gap: 4 }}>
+                {t.stock.split(",").map(s => s.trim()).filter(Boolean).map((s, i) => (
+                  <span key={i} style={{ fontSize: 11, background: "#1e2130", border: "1px solid #2a2d3a", borderRadius: 10, padding: "1px 8px", color: "#8abeee" }}>{s}</span>
+                ))}
+              </div>
+            )}
+            {(t.summary || t.textContent) && (
+              <div style={{ marginTop: 5, fontSize: 12, color: "#666", textAlign: "left" }}>
+                {(t.summary || t.textContent).slice(0, 70)}{(t.summary || t.textContent).length > 70 ? "..." : ""}
+              </div>
+            )}
+          </div>
+        );
+
+        if (!groupByDate) return <div style={{ display: "grid", gap: 8 }}>{lTrades.map(TradeRow)}</div>;
+        const grouped = lTrades.reduce((acc, t) => { const d = t.date || "날짜없음"; (acc[d] = acc[d] || []).push(t); return acc; }, {});
+        const sortedDates = [...new Set(lTrades.map(t => t.date || "날짜없음"))];
+        return (
+          <div style={{ display: "grid", gap: 4 }}>
+            {sortedDates.map(date => (
+              <div key={date} id={`date-sec-${date}`}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 2px", borderBottom: "1px solid #2a2d3a", marginBottom: 6 }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "#e74c3c" }}>📅 {date}</span>
+                  <span style={{ fontSize: 11, color: "#555" }}>{grouped[date].length}건</span>
                 </div>
-                {t.stock && (
-                  <div style={{ marginTop: 4, display: "flex", flexWrap: "wrap", gap: 4 }}>
-                    {t.stock.split(",").map(s => s.trim()).filter(Boolean).map((s, i) => (
-                      <span key={i} style={{ fontSize: 11, background: "#1e2130", border: "1px solid #2a2d3a", borderRadius: 10, padding: "1px 8px", color: "#8abeee" }}>{s}</span>
-                    ))}
-                  </div>
-                )}
-                {(t.summary || t.textContent) && (
-                  <div style={{ marginTop: 5, fontSize: 12, color: "#666", textAlign: "left" }}>
-                    {(t.summary || t.textContent).slice(0, 70)}{(t.summary || t.textContent).length > 70 ? "..." : ""}
-                  </div>
-                )}
+                <div style={{ display: "grid", gap: 6, marginBottom: 10 }}>{grouped[date].map(TradeRow)}</div>
               </div>
             ))}
           </div>
-      )}
+        );
+      })()}
 
       {!loading && view === "detail" && selected && (() => {
         const idx = lTrades.findIndex(t => t.id === selected.id);
         return (
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-              <button onClick={() => { setView("list"); setSelected(null); setFeedback(""); setAiAnalysis(""); setSimilarTrades([]); }}
+              <button onClick={() => { scrollTargetRef.current = `live-row-${selected.id}`; setView("list"); setSelected(null); setFeedback(""); setAiAnalysis(""); setSimilarTrades([]); }}
                 style={{ background: "none", border: "none", color: "#e74c3c", cursor: "pointer", fontSize: 13 }}>← 목록</button>
               <span style={{ flex: 1 }} />
               <button onClick={() => idx > 0 && openDetail(lTrades[idx - 1])} disabled={idx <= 0}
