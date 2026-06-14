@@ -1322,7 +1322,7 @@ function JournalTab({ techniques }) {
       if (selected.chartImg) userContent.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: selected.chartImg } });
       userContent.push(...liveImageBlocks);
       const imageNote = (selected.chartImg || liveImageBlocks.length)
-        ? `[첨부 이미지]${selected.chartImg ? "\n- 이 매매의 차트 이미지 (캔들 모양, 진입/이탈 시간대 분석에 활용)\n- 차트 하단 가로축 숫자 해석: 굵게(볼드) 표시된 숫자는 날짜, 일반 글씨 숫자는 시간이다. 단, 적용기법이 '투경해제'인 경우 이 규칙이 다를 수 있으니 단정하지 말고, 구분이 애매하면 시간을 추측하지 말 것." : ""}${liveImageBlocks.length ? `\n- 동일 날짜 실전매매 관련 이미지 ${liveImageBlocks.length}장` : ""}\n이미지에서 실제로 확인 가능한 내용만 사용하고, 기법 설명과 무관하거나 불확실한 내용은 언급하지 말 것.`
+        ? `[첨부 이미지]${selected.chartImg ? "\n- 이 매매의 차트 이미지 (캔들 모양, 진입/이탈 시간대 분석에 활용)\n- 차트 하단 가로축 숫자 해석: 굵게(볼드) 표시된 숫자는 날짜, 얇은 일반 글씨 숫자는 시간이다. 차트는 분봉 등 타임프레임 기준으로 그려지므로 얇은 글씨는 항상 시간이며 날짜일 수 없다." : ""}${liveImageBlocks.length ? `\n- 동일 날짜 실전매매 관련 이미지 ${liveImageBlocks.length}장` : ""}\n이미지에서 실제로 확인 가능한 내용만 사용하고, 기법 설명과 무관하거나 불확실한 내용은 언급하지 말 것.`
         : `[첨부 이미지] 없음. 차트 기반 분석(봉 모양, 시간대 등)은 시도하지 말고 '차트 없음'으로만 명시할 것. 추측해서 지어내지 말 것.`;
 
       const dayIdx = dayOfWeek(selected.date);
