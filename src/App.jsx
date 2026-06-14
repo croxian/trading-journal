@@ -1321,8 +1321,8 @@ function JournalTab({ techniques }) {
       const userContent = [];
       if (selected.chartImg) userContent.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: selected.chartImg } });
       userContent.push(...liveImageBlocks);
-      const chartAxisNote = "\n- 차트 하단 가로축 숫자 해석: 굵게(볼드) 표시된 숫자는 날짜, 얇은 일반 글씨 숫자는 시간이다. 차트는 분봉 등 타임프레임 기준으로 그려지므로 얇은 글씨는 항상 시간이며 날짜일 수 없다." +
-        (selected.technique === "투경해제" ? " 단, '투경해제' 기법은 일봉(daily) 차트를 쓰는 경우가 있으며, 이때 가로축은 연/월 단위(예: 2026/03, 04, 05)로 표시되므로 위 규칙이 아닌 연/월 단위로 해석할 것." : "");
+      const chartAxisNote = "\n- 차트 하단 가로축 라벨 해석: 글씨 굵기(볼드 여부)로 구분하지 말 것 - 이미지에서 굵기 구분은 신뢰할 수 없다. 대신 '/' 포함 여부로 구분: '/'가 있는 라벨(예: 05/21, 05/22)은 날짜이고, '/' 없이 숫자만 있는 라벨(예: 10, 11, 12, 13, 14)은 시간(시 단위)이다. 차트는 분봉 등 타임프레임 기준으로 그려지므로 '/' 없는 숫자는 항상 시간이며 '~일'(날짜)로 해석하면 안 된다." +
+        (selected.technique === "투경해제" ? " 단, '투경해제' 기법은 일봉(daily) 차트를 쓰는 경우가 있으며, 이때는 가로축 라벨 전체가 연/월 단위(예: 2026/03, 04, 05)로 표시되므로 위 규칙이 아닌 연/월 단위로 해석할 것." : "");
       const imageNote = (selected.chartImg || liveImageBlocks.length)
         ? `[첨부 이미지]${selected.chartImg ? `\n- 이 매매의 차트 이미지 (캔들 모양, 진입/이탈 시간대 분석에 활용)${chartAxisNote}` : ""}${liveImageBlocks.length ? `\n- 동일 날짜 실전매매 관련 이미지 ${liveImageBlocks.length}장` : ""}\n이미지에서 실제로 확인 가능한 내용만 사용하고, 기법 설명과 무관하거나 불확실한 내용은 언급하지 말 것.`
         : `[첨부 이미지] 없음. 차트 기반 분석(봉 모양, 시간대 등)은 시도하지 말고 '차트 없음'으로만 명시할 것. 추측해서 지어내지 말 것.`;
