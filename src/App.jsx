@@ -817,6 +817,7 @@ function JournalTab({ techniques }) {
   const selectedRef = useRef(null);
   const detailOriginTabRef = useRef("trades");
   const watchToggledRef = useRef(false);
+  const analysisCacheRef = useRef({});
   const scrollTargetRef = useScrollRestore(view);
   const isMobile = useIsMobile();
 
@@ -861,10 +862,22 @@ function JournalTab({ techniques }) {
     setLoading(false);
   }, []);
 
+  // AI 분석/유사매매 결과를 매매별로 캐싱해, 다른 매매를 보고 돌아와도 결과가 바뀌지 않도록 복원
+  const restoreAnalysisFor = (trade, allTrades) => {
+    const cached = analysisCacheRef.current[trade.id];
+    if (cached) {
+      setDetailAiAnalysis(cached.text);
+      setSimilarTrades(cached.similarIds.map(id => allTrades.find(x => x.id === id)).filter(Boolean));
+    } else {
+      setDetailAiAnalysis("");
+      setSimilarTrades(trade.aiAnalysis ? calcSimilarTrades(trade, allTrades) : []);
+    }
+  };
+
   const openDetail = async (trade) => {
     window.history.pushState({ ...(window.history.state || {}), journalView: "detail", journalId: trade.id }, "");
-    setSelected(trade); setView("detail"); setFeedback(""); setEditTrade(false); setDetailAiAnalysis("");
-    setSimilarTrades(trade.aiAnalysis ? calcSimilarTrades(trade, trades) : []);
+    setSelected(trade); setView("detail"); setFeedback(""); setEditTrade(false);
+    restoreAnalysisFor(trade, trades);
     setDetailImgLoading(true);
     const img = await sbGetChartImg(trade.id);
     setSelected(prev => prev?.id === trade.id ? { ...prev, chartImg: img } : prev);
@@ -880,8 +893,8 @@ function JournalTab({ techniques }) {
       if (s.journalView === "detail" && s.journalId) {
         const t = tradesRef.current.find(x => x.id === s.journalId);
         if (t) {
-          setSelected(t); setView("detail"); setFeedback(""); setEditTrade(false); setDetailAiAnalysis("");
-          setSimilarTrades(t.aiAnalysis ? calcSimilarTrades(t, tradesRef.current) : []);
+          setSelected(t); setView("detail"); setFeedback(""); setEditTrade(false);
+          restoreAnalysisFor(t, tradesRef.current);
           setDetailImgLoading(true);
           sbGetChartImg(t.id).then(img => setSelected(p => p?.id === t.id ? { ...p, chartImg: img } : p)).finally(() => setDetailImgLoading(false));
         }
@@ -1283,12 +1296,15 @@ function JournalTab({ techniques }) {
       const simMatch = result.match(/SIMILAR:\[([\d,\s]*)\]/);
       const analysisText = result.replace(/\n?SIMILAR:\[[\d,\s]*\]\s*$/, '').trim();
       setDetailAiAnalysis(analysisText);
+      let sims;
       if (simMatch) {
         const ids = simMatch[1].split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
-        setSimilarTrades(pastTradesArr.filter(t => ids.includes(t.id)));
+        sims = pastTradesArr.filter(t => ids.includes(t.id));
       } else {
-        setSimilarTrades(calcSimilarTrades(selected, trades));
+        sims = calcSimilarTrades(selected, trades);
       }
+      setSimilarTrades(sims);
+      analysisCacheRef.current[selected.id] = { text: analysisText, similarIds: sims.map(t => t.id) };
     } catch (e) { setFeedback(`❌ ${e.message}`); }
     setDetailAiLoading(false);
   };
@@ -2105,31 +2121,21 @@ function JournalTab({ techniques }) {
                     : <div style={{ color: "#555", fontSize: 12, padding: "8px 0" }}>차트 없음</div>
                 }
               </div>
-              {selected.aiAnalysis && (
-                <div style={{ marginBottom: 10 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                    <span style={label11}>🤖 AI 분석 (저장됨)</span>
-                    <button onClick={async () => {
-                      try {
-                        await sbPatch(selected.id, { ai_analysis: null });
-                        setSelected(p => ({ ...p, aiAnalysis: null }));
-                        setTrades(p => p.map(t => t.id === selected.id ? { ...t, aiAnalysis: null } : t));
-                        setFeedback("✅ AI 분석 삭제됨");
-                      } catch (e) { setFeedback(`❌ ${e.message}`); }
-                    }} style={{ padding: "2px 8px", background: "#3a1a1a", border: "none", color: "#e74c3c", borderRadius: 4, cursor: "pointer", fontSize: 11 }}>삭제</button>
-                  </div>
-                  <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad" }}>{selected.aiAnalysis}</div>
-                </div>
-              )}
               <div style={{ marginTop: 4 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                  <span style={{ fontSize: 12, color: "#8e44ad", fontWeight: 600 }}>🤖 AI 유사 분석</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 12, color: "#8e44ad", fontWeight: 600 }}>🤖 AI 분석</span>
                   <button onClick={analyzeDetailTrade} disabled={detailAiLoading}
                     style={{ padding: "3px 12px", background: detailAiLoading ? "#333" : "#8e44ad", color: "#fff", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>
-                    {detailAiLoading ? "분석 중..." : detailAiAnalysis ? "재분석" : "분석 시작"}
+                    {detailAiLoading ? "분석 중..." : (detailAiAnalysis || selected.aiAnalysis) ? "재분석" : "분석 시작"}
                   </button>
-                  {detailAiAnalysis && <button onClick={() => setDetailAiAnalysis("")} style={{ padding: "3px 10px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 11 }}>초기화</button>}
                   {detailAiAnalysis && (
+                    <button onClick={() => {
+                      delete analysisCacheRef.current[selected.id];
+                      setDetailAiAnalysis("");
+                      setSimilarTrades(selected.aiAnalysis ? calcSimilarTrades(selected, trades) : []);
+                    }} style={{ padding: "3px 10px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 11 }}>초기화</button>
+                  )}
+                  {detailAiAnalysis && detailAiAnalysis !== selected.aiAnalysis && (
                     <button onClick={async () => {
                       try {
                         await sbPatch(selected.id, { ai_analysis: detailAiAnalysis });
@@ -2139,8 +2145,22 @@ function JournalTab({ techniques }) {
                       } catch (e) { setFeedback(`❌ ${e.message}`); }
                     }} style={{ padding: "3px 12px", background: "#4f8ef7", color: "#fff", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 11 }}>💾 저장</button>
                   )}
+                  {(detailAiAnalysis || selected.aiAnalysis) && (
+                    <button onClick={async () => {
+                      try {
+                        if (selected.aiAnalysis) {
+                          await sbPatch(selected.id, { ai_analysis: null });
+                          setSelected(p => ({ ...p, aiAnalysis: null }));
+                          setTrades(p => p.map(t => t.id === selected.id ? { ...t, aiAnalysis: null } : t));
+                        }
+                        delete analysisCacheRef.current[selected.id];
+                        setDetailAiAnalysis(""); setSimilarTrades([]);
+                        setFeedback("✅ AI 분석 삭제됨");
+                      } catch (e) { setFeedback(`❌ ${e.message}`); }
+                    }} style={{ padding: "2px 8px", background: "#3a1a1a", border: "none", color: "#e74c3c", borderRadius: 4, cursor: "pointer", fontSize: 11 }}>삭제</button>
+                  )}
                 </div>
-                {detailAiAnalysis && <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad", whiteSpace: "pre-wrap", lineHeight: 1.7 }}>{detailAiAnalysis}</div>}
+                {(detailAiAnalysis || selected.aiAnalysis) && <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad", whiteSpace: "pre-wrap", lineHeight: 1.7 }}>{detailAiAnalysis || selected.aiAnalysis}</div>}
                 {similarTrades.length > 0 && (
                   <div style={{ marginTop: 10, padding: "10px 12px", background: "#12161e", border: "1px solid #2a2d3a", borderRadius: 8 }}>
                     <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>📎 AI 선정 유사 매매 ({similarTrades.length}건)</div>
