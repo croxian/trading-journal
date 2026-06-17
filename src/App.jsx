@@ -984,6 +984,7 @@ function JournalTab({ techniques }) {
     setImgLoading(false);
   };
   const handlePaste = async (e) => {
+    if (inputMode !== "img0606" && inputMode !== "img0397") return;
     // 클립보드 데이터는 await 이전에 동기적으로 모두 수집해야 함
     const imageFiles = [];
     if (e.clipboardData?.items) {
@@ -1030,7 +1031,7 @@ function JournalTab({ techniques }) {
   };
 
   const handleSave = async () => {
-    if (!form.stock || !form.buyPrice) { setFeedback("❌ 종목명과 매수가는 필수."); return; }
+    if (!form.stock || !form.date || !form.technique) { setFeedback("❌ 종목명, 날짜, 매매 카테고리는 필수."); return; }
     const trade = { ...form, id: Date.now(), createdAt: new Date().toLocaleDateString("ko-KR"), chartImg, aiAnalysis };
     try {
       await sbUpsert("trades", [tradeToRow(trade)]);
@@ -1634,7 +1635,7 @@ function JournalTab({ techniques }) {
       {loading && <div style={{ color: "#555", padding: 40, textAlign: "center" }}>로딩 중...</div>}
 
       {!loading && view === "add" && (
-        <div>
+        <div onPaste={handlePaste}>
           <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
             {[["img0606","📈 [0606]"], ["img0397","📋 [0328]"], ["ppt","📊 PPT"], ["manual","✏️ 직접입력"]].map(([m, label]) => (
               <button key={m} onClick={() => { setInputMode(m); setPending0397([]); setPendingPpt([]); setFeedback(""); }}
@@ -1646,7 +1647,6 @@ function JournalTab({ techniques }) {
             <div
               ref={pasteZoneRef}
               tabIndex={0}
-              onPaste={handlePaste}
               onClick={() => pasteZoneRef.current?.focus()}
               style={{ marginBottom: 14, outline: "none" }}
             >
@@ -1850,7 +1850,7 @@ function JournalTab({ techniques }) {
                   )}
                 </div>
                 <div>
-                  <div style={label11}>날짜</div>
+                  <div style={label11}>날짜 *</div>
                   <input type="date" value={form.date || ""} onChange={e => setForm(p => ({ ...p, date: e.target.value }))}
                     style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box", colorScheme: "dark" }} />
                 </div>
@@ -1863,11 +1863,11 @@ function JournalTab({ techniques }) {
                   </label>
                   {fill0397Loading && <span style={{ fontSize: 11, color: "#aaa" }}>⏳</span>}
                 </div>
-                {[["buyPrice","매수가 *","numcomma"],["sellPrice","매도가","numcomma"],["amount","매입금액","numcomma"],["pnl","실현손익","numcomma"],["pnlRate","수익률 (%)","number"]].map(([f,p,t]) => (
+                {[["buyPrice","매수가","numcomma"],["sellPrice","매도가","numcomma"],["amount","매입금액","numcomma"],["pnl","실현손익","numcomma"],["pnlRate","수익률 (%)","number"]].map(([f,p,t]) => (
                   <div key={f}><div style={label11}>{p}</div>{inp(f, p, t)}</div>
                 ))}
                 <div>
-                  <div style={label11}>매매 카테고리</div>
+                  <div style={label11}>매매 카테고리 *</div>
                   <select
                     value={TRADE_CATEGORIES.includes(form.technique) ? form.technique : (form.technique ? "기타" : "")}
                     onChange={e => {
@@ -1897,7 +1897,16 @@ function JournalTab({ techniques }) {
                     style={{ width: "100%", minHeight: f === "reason" ? 80 : 60, background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: 10, fontSize: 13, resize: "vertical", boxSizing: "border-box", textAlign: "left" }} />
                 </div>
               ))}
-              {chartImg && <div style={{ marginBottom: 12 }}><div style={label11}>첨부 차트</div><img src={`data:image/png;base64,${chartImg}`} alt="chart" style={{ maxWidth: "100%", borderRadius: 6, border: "1px solid #2a2d3a" }} /></div>}
+              {chartImg && (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                    <div style={label11}>첨부 차트</div>
+                    <button onClick={() => setChartImg(null)}
+                      style={{ background: "none", border: "none", color: "#e74c3c", cursor: "pointer", fontSize: 12 }}>제거</button>
+                  </div>
+                  <img src={`data:image/png;base64,${chartImg}`} alt="chart" style={{ maxWidth: "100%", borderRadius: 6, border: "1px solid #2a2d3a" }} />
+                </div>
+              )}
               <div style={{ marginBottom: 12 }}>
                 <button onClick={handleAiAnalysis} disabled={aiLoading} style={{ padding: "8px 18px", background: aiLoading ? "#333" : "#8e44ad", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13 }}>
                   {aiLoading ? "분석 중..." : "🤖 AI 기법 분석"}
