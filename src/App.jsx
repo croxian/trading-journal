@@ -1907,12 +1907,6 @@ function JournalTab({ techniques }) {
                   <img src={`data:image/png;base64,${chartImg}`} alt="chart" style={{ maxWidth: "100%", borderRadius: 6, border: "1px solid #2a2d3a" }} />
                 </div>
               )}
-              <div style={{ marginBottom: 12 }}>
-                <button onClick={handleAiAnalysis} disabled={aiLoading} style={{ padding: "8px 18px", background: aiLoading ? "#333" : "#8e44ad", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13 }}>
-                  {aiLoading ? "분석 중..." : "🤖 AI 기법 분석"}
-                </button>
-                {aiAnalysis && <div style={{ marginTop: 10, background: "#1a1330", border: "1px solid #8e44ad", borderRadius: 8, padding: 14, fontSize: 13, color: "#ddd", lineHeight: 1.7, whiteSpace: "pre-wrap", textAlign: "left" }}>{aiAnalysis}</div>}
-              </div>
               <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                 <button onClick={handleSave} style={{ padding: "8px 20px", background: "#4f8ef7", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>저장</button>
                 {feedback && <span style={{ fontSize: 13, color: feedback.startsWith("✅") ? "#4caf50" : "#e74c3c" }}>{feedback}</span>}
