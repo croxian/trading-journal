@@ -14,7 +14,7 @@ const sbGet = async (table) => {
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 };
-const TRADE_LIST_FIELDS = "id,stock,date,buy_price,sell_price,amount,pnl,pnl_rate,reason,technique,memo,ai_analysis,chart_desc,created_at,is_watched,deleted_at";
+const TRADE_LIST_FIELDS = "id,stock,date,buy_price,sell_price,amount,pnl,pnl_rate,reason,technique,memo,ai_analysis,chart_desc,created_at,deleted_at";
 const sbGetTrades = async () => {
   const r = await fetch(`${SB_URL}/rest/v1/trades?select=${TRADE_LIST_FIELDS}&deleted_at=is.null&order=id.asc`, { headers: HDR });
   if (!r.ok) throw new Error(await r.text());
@@ -94,8 +94,8 @@ const rowToLiveTrade = (r) => ({
 });
 const techToRow = (t) => ({ id: t.id, name: t.name, category: t.category, timeframe: t.timeframe, entry: t.entry, exit: t.exit, pattern: t.pattern, tags: t.tags, notes: t.notes, raw_input: t.rawInput, created_at: t.createdAt });
 const rowToTech = (r) => ({ id: r.id, name: r.name, category: r.category, timeframe: r.timeframe, entry: r.entry, exit: r.exit, pattern: r.pattern, tags: r.tags, notes: r.notes, rawInput: r.raw_input, createdAt: r.created_at });
-const tradeToRow = (t) => ({ id: t.id, stock: t.stock, date: t.date, buy_price: t.buyPrice, sell_price: t.sellPrice, amount: t.amount, pnl: t.pnl, pnl_rate: t.pnlRate, reason: t.reason, technique: t.technique, memo: t.memo, chart_img: t.chartImg, ai_analysis: t.aiAnalysis, chart_desc: t.chartDesc, created_at: t.createdAt, is_watched: t.isWatched === true });
-const rowToTrade = (r) => ({ id: r.id, stock: r.stock, date: r.date, buyPrice: r.buy_price, sellPrice: r.sell_price, amount: r.amount, pnl: r.pnl, pnlRate: r.pnl_rate, reason: r.reason, technique: r.technique, memo: r.memo, chartImg: r.chart_img, aiAnalysis: r.ai_analysis, chartDesc: r.chart_desc, createdAt: r.created_at, isWatched: r.is_watched === true, deletedAt: r.deleted_at || null });
+const tradeToRow = (t) => ({ id: t.id, stock: t.stock, date: t.date, buy_price: t.buyPrice, sell_price: t.sellPrice, amount: t.amount, pnl: t.pnl, pnl_rate: t.pnlRate, reason: t.reason, technique: t.technique, memo: t.memo, chart_img: t.chartImg, ai_analysis: t.aiAnalysis, chart_desc: t.chartDesc, created_at: t.createdAt });
+const rowToTrade = (r) => ({ id: r.id, stock: r.stock, date: r.date, buyPrice: r.buy_price, sellPrice: r.sell_price, amount: r.amount, pnl: r.pnl, pnlRate: r.pnl_rate, reason: r.reason, technique: r.technique, memo: r.memo, chartImg: r.chart_img, aiAnalysis: r.ai_analysis, chartDesc: r.chart_desc, createdAt: r.created_at, deletedAt: r.deleted_at || null });
 
 // ==================== 매매 카테고리 ====================
 const TRADE_CATEGORIES = [
@@ -424,13 +424,14 @@ function DashboardTab({ onNavigate }) {
 
   if (loading) return <div style={{ color: "#555", padding: 40, textAlign: "center" }}>로딩 중...</div>;
 
-  const total = trades.length;
-  const wins = trades.filter(t => parseFloat(t.pnlRate) > 0).length;
-  const losses = trades.filter(t => parseFloat(t.pnlRate) < 0).length;
+  const scored = trades.filter(t => t.pnlRate !== "" && t.pnlRate != null && t.pnlRate !== undefined);
+  const total = scored.length;
+  const wins = scored.filter(t => parseFloat(t.pnlRate) > 0).length;
+  const losses = scored.filter(t => parseFloat(t.pnlRate) < 0).length;
   const winRate = total ? ((wins / total) * 100).toFixed(1) : 0;
   const totalPnl = trades.reduce((s, t) => s + (parseFloat(t.pnl) || 0), 0);
-  const avgWin = wins ? (trades.filter(t => parseFloat(t.pnlRate) > 0).reduce((s, t) => s + parseFloat(t.pnlRate), 0) / wins).toFixed(2) : 0;
-  const avgLoss = losses ? (trades.filter(t => parseFloat(t.pnlRate) < 0).reduce((s, t) => s + parseFloat(t.pnlRate), 0) / losses).toFixed(2) : 0;
+  const avgWin = wins ? (scored.filter(t => parseFloat(t.pnlRate) > 0).reduce((s, t) => s + parseFloat(t.pnlRate), 0) / wins).toFixed(2) : 0;
+  const avgLoss = losses ? (scored.filter(t => parseFloat(t.pnlRate) < 0).reduce((s, t) => s + parseFloat(t.pnlRate), 0) / losses).toFixed(2) : 0;
   const recent5 = [...trades].sort((a, b) => b.id - a.id).slice(0, 5);
 
   // 월별 손익
@@ -443,9 +444,9 @@ function DashboardTab({ onNavigate }) {
   });
   const months = Object.entries(byMonth).sort((a, b) => a[0].localeCompare(b[0])).slice(-6);
 
-  // 기법별 승률
+  // 기법별 승률 (수익률 있는 종목만)
   const byTech = {};
-  trades.forEach(t => {
+  scored.forEach(t => {
     const k = t.technique || "미분류";
     if (!byTech[k]) byTech[k] = { total: 0, wins: 0 };
     byTech[k].total++; if (parseFloat(t.pnlRate) > 0) byTech[k].wins++;
@@ -809,9 +810,8 @@ function JournalTab({ techniques }) {
   const [pptProgress, setPptProgress] = useState("");
   const [detailImgLoading, setDetailImgLoading] = useState(false);
   const [fill0397Loading, setFill0397Loading] = useState(false);
-  const [pptFilter, setPptFilter] = useState("all");
   const [editPasteMode, setEditPasteMode] = useState("0606");
-  const [groupByDate, setGroupByDate] = useState(false);
+  const [groupByDate, setGroupByDate] = useState(true);
   const [scrollToDate, setScrollToDate] = useState(null);
   const [detailAiAnalysis, setDetailAiAnalysis] = useState("");
   const [detailAiLoading, setDetailAiLoading] = useState(false);
@@ -832,21 +832,11 @@ function JournalTab({ techniques }) {
   const pasteZoneRef = useRef(null);
   const tradesRef = useRef([]);
   const selectedRef = useRef(null);
-  const detailOriginTabRef = useRef("trades");
-  const watchToggledRef = useRef(false);
   const analysisCacheRef = useRef({});
   const scrollTargetRef = useScrollRestore(view);
   const isMobile = useIsMobile();
 
   useEffect(() => { selectedRef.current = selected; }, [selected]);
-
-  // 상세보기로 들어가기 전 보고 있던 탭을 기억해, 매매/관심종목 토글 후 목록/뒤로가기 시 그 탭으로 복귀
-  useEffect(() => {
-    if (view !== "detail") {
-      detailOriginTabRef.current = listTab;
-      watchToggledRef.current = false;
-    }
-  }, [listTab, view]);
 
   useEffect(() => {
     if (view === "add" && (inputMode === "img0606" || inputMode === "img0397")) {
@@ -917,7 +907,6 @@ function JournalTab({ techniques }) {
         }
       } else {
         if (selectedRef.current) scrollTargetRef.current = `trade-row-${selectedRef.current.id}`;
-        if (watchToggledRef.current) setListTab(detailOriginTabRef.current);
         setView("list"); setSelected(null); setEditTrade(false); setFeedback(""); setDetailAiAnalysis(""); setSimilarTrades([]);
       }
     };
@@ -1383,7 +1372,6 @@ function JournalTab({ techniques }) {
             stock: p.stock || "", date: p.date || new Date().toISOString().slice(0, 10),
             reason: p.reason || "", chartImg,
             buyPrice: "", sellPrice: "", amount: "", pnl: "", pnlRate: "", technique: "", memo: "",
-            isTraded: true,
           });
         } catch { /* 슬라이드 파싱 실패 시 스킵 */ }
       }
@@ -1400,14 +1388,12 @@ function JournalTab({ techniques }) {
     try {
       const newTrades = pendingPpt.map((t, i) => ({
         ...t, id: base + i, createdAt: new Date().toLocaleDateString("ko-KR"),
-        aiAnalysis: "", chartDesc: "", isWatched: t.isTraded === false,
+        aiAnalysis: "", chartDesc: "",
       }));
       await sbUpsert("trades", newTrades.map(tradeToRow));
       setTrades(p => [...[...newTrades].reverse(), ...p]);
-      const watched = newTrades.filter(t => t.isWatched).length;
-      const traded = newTrades.length - watched;
-      setPendingPpt([]); setPptFilter("all");
-      setFeedback(`✅ 저장됨 (매매 ${traded}건, 관심종목 ${watched}건)`);
+      setPendingPpt([]);
+      setFeedback(`✅ ${newTrades.length}건 저장됨`);
       setListTab("trades"); setView("list");
     } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
@@ -1590,8 +1576,7 @@ function JournalTab({ techniques }) {
     <div>
       <div style={{ position: "sticky", top: isMobile ? 76 : 45, zIndex: 90, background: "#0f1117", paddingTop: 8, paddingBottom: 8, marginBottom: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         {[
-          ["trades", `📋 매매 (${trades.filter(t => !t.isWatched).length})`],
-          ["watchlist", `👀 관심종목 (${trades.filter(t => t.isWatched).length})`],
+          ["trades", `📋 매매 (${trades.length})`],
           ["trash", `🗑️ 휴지통${trashTrades.length > 0 ? ` (${trashTrades.length})` : ""}`],
         ].map(([tab, label]) => (
           <button key={tab} onClick={() => {
@@ -1627,7 +1612,7 @@ function JournalTab({ techniques }) {
             title="날짜로 이동" />
         )}
         {view === "list" && !selected && listTab !== "trash" && (() => {
-          const allTechs = [...new Set(trades.filter(t => !t.isWatched && t.technique).map(t => t.technique))].sort();
+          const allTechs = [...new Set(trades.filter(t => t.technique).map(t => t.technique))].sort();
           return (
             <>
               <div style={{ position: "relative" }}>
@@ -1716,30 +1701,17 @@ function JournalTab({ techniques }) {
                   {!pptLoading && feedback && <div style={{ marginTop: 8, fontSize: 13, color: feedback.startsWith("✅") ? "#4caf50" : "#e74c3c" }}>{feedback}</div>}
                 </div>
               ) : (() => {
-                const filteredPpt = pendingPpt.filter(t =>
-                  pptFilter === "all" ? true : pptFilter === "traded" ? t.isTraded !== false : t.isTraded === false
-                );
                 const upd = (i, patch) => setPendingPpt(p => p.map((r, j) => j === i ? { ...r, ...patch } : r));
                 return (
                   <div>
                     <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
-                      {[["all","전체"], ["traded","실제매매"], ["watched","관심종목"]].map(([v, lbl]) => (
-                        <button key={v} onClick={() => setPptFilter(v)}
-                          style={{ padding: "4px 12px", borderRadius: 5, border: "none", cursor: "pointer", fontSize: 12, background: pptFilter === v ? "#4f8ef7" : "#2a2d3a", color: pptFilter === v ? "#fff" : "#aaa" }}>{lbl}</button>
-                      ))}
                       <span style={{ fontSize: 12, color: "#555", marginLeft: 4 }}>{feedback}</span>
                     </div>
                     <div style={{ display: "grid", gap: 10, marginBottom: 14 }}>
-                      {filteredPpt.map((t, fi) => {
-                        const i = pendingPpt.indexOf(t);
-                        const isWatched = t.isTraded === false;
+                      {pendingPpt.map((t, i) => {
                         return (
-                          <div key={i} style={{ ...box, border: `1px solid ${isWatched ? "#555" : "#2a2d3a"}`, opacity: isWatched ? 0.75 : 1, position: "relative" }}>
+                          <div key={i} style={{ ...box, border: "1px solid #2a2d3a", position: "relative" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                              <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", fontSize: 12 }}>
-                                <input type="checkbox" checked={!isWatched} onChange={e => upd(i, { isTraded: e.target.checked })} style={{ accentColor: "#4f8ef7" }} />
-                                <span style={{ color: isWatched ? "#777" : "#aaa" }}>{isWatched ? "관심종목" : "실제매매"}</span>
-                              </label>
                               <button onClick={() => setPendingPpt(p => p.filter((_, j) => j !== i))}
                                 style={{ marginLeft: "auto", background: "none", border: "none", color: "#e74c3c", cursor: "pointer", fontSize: 13 }}>✕</button>
                             </div>
@@ -1768,16 +1740,14 @@ function JournalTab({ techniques }) {
                                   style={{ width:"100%", minHeight:52, background:"#13151f", border:"1px solid #2a2d3a", borderRadius:6, color:"#e0e0e0", padding:7, fontSize:12, resize:"vertical", boxSizing:"border-box" }} />
                               </div>
                             </div>
-                            {!isWatched && (
-                              <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 5 }}>
-                                {[["buyPrice","매수가"],["sellPrice","매도가"],["pnlRate","수익률(%)"],["pnl","실현손익"],["amount","매입금액"]].map(([f, lbl]) => (
-                                  <div key={f}><div style={label11}>{lbl}</div>
-                                    <input type="number" value={t[f]} onChange={e => upd(i, { [f]: e.target.value })} placeholder="-"
-                                      style={{ width:"100%", background:"#13151f", border:"1px solid #2a2d3a", borderRadius:6, color:"#e0e0e0", padding:"5px 7px", fontSize:12, boxSizing:"border-box" }} />
-                                  </div>
-                                ))}
-                              </div>
-                            )}
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 5 }}>
+                              {[["buyPrice","매수가"],["sellPrice","매도가"],["pnlRate","수익률(%)"],["pnl","실현손익"],["amount","매입금액"]].map(([f, lbl]) => (
+                                <div key={f}><div style={label11}>{lbl}</div>
+                                  <input type="number" value={t[f]} onChange={e => upd(i, { [f]: e.target.value })} placeholder="-"
+                                    style={{ width:"100%", background:"#13151f", border:"1px solid #2a2d3a", borderRadius:6, color:"#e0e0e0", padding:"5px 7px", fontSize:12, boxSizing:"border-box" }} />
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         );
                       })}
@@ -1795,7 +1765,7 @@ function JournalTab({ techniques }) {
                     </div>
                     <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                       <button onClick={handleBulkSavePpt} style={{ padding: "8px 20px", background: "#4f8ef7", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>실제매매 저장</button>
-                      <button onClick={() => { setPendingPpt([]); setPptFilter("all"); setFeedback(""); }} style={{ padding: "8px 14px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>취소</button>
+                      <button onClick={() => { setPendingPpt([]); setFeedback(""); }} style={{ padding: "8px 14px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>취소</button>
                     </div>
                   </div>
                 );
@@ -2014,10 +1984,9 @@ function JournalTab({ techniques }) {
       )}
 
       {!loading && view === "list" && !selected && listTab !== "trash" && (() => {
-        const isWatch = listTab === "watchlist";
-        const filtered = applyTechFilter(trades.filter(t => isWatch ? t.isWatched : !t.isWatched));
+        const filtered = applyTechFilter(trades);
         const sorted = sortTrades(filtered);
-        if (sorted.length === 0) return <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>{isWatch ? "관심종목 없음" : "매매 기록 없음"}</div>;
+        if (sorted.length === 0) return <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>매매 기록 없음</div>;
 
         const toggleSelect = (id) => setSelectedIds(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
         const allFiltered = sorted;
@@ -2086,7 +2055,7 @@ function JournalTab({ techniques }) {
       })()}
 
       {!loading && view === "detail" && selected && (() => {
-        const detailFiltered = sortTrades(applyTechFilter(trades.filter(t => selected.isWatched ? t.isWatched : !t.isWatched)));
+        const detailFiltered = sortTrades(applyTechFilter(trades));
         const detailIdx = detailFiltered.findIndex(t => t.id === selected.id);
         return (
         <div>
@@ -2094,7 +2063,6 @@ function JournalTab({ techniques }) {
             <button onClick={() => {
               window.history.replaceState({ ...(window.history.state || {}), journalView: "list" }, "");
               if (selected) scrollTargetRef.current = `trade-row-${selected.id}`;
-              if (watchToggledRef.current) setListTab(detailOriginTabRef.current);
               setView("list"); setSelected(null); setEditTrade(false); setFeedback(""); setDetailAiAnalysis(""); setSimilarTrades([]);
             }} style={{ background: "none", border: "none", color: "#4f8ef7", cursor: "pointer", fontSize: 13 }}>← 목록</button>
             <span style={{ flex: 1 }} />
@@ -2110,25 +2078,8 @@ function JournalTab({ techniques }) {
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
                 <span style={{ fontSize: 18, fontWeight: 700 }}>{selected.stock}</span>
                 <span style={{ fontSize: 13, color: "#666" }}>{selected.date}</span>
-                {selected.isWatched && <span style={{ background: "#7a6000", fontSize: 12, padding: "2px 8px", borderRadius: 4, color: "#f39c12" }}>👀 관심종목</span>}
                 {selected.technique && <span style={{ background: categoryColor(selected.technique), fontSize: 12, padding: "2px 8px", borderRadius: 4, color: "#fff" }}>{selected.technique}</span>}
-                {!selected.isWatched && <span style={{ marginLeft: "auto", fontSize: 18, fontWeight: 700, color: pnlColor(parseFloat(selected.pnlRate)) }}>{parseFloat(selected.pnlRate) > 0 ? "+" : ""}{selected.pnlRate}%</span>}
-                {selected.isWatched && <span style={{ marginLeft: "auto" }} />}
-                {selected.isWatched ? (
-                  <button onClick={async () => {
-                    const updated = { ...selected, isWatched: false };
-                    await sbUpsert("trades", [tradeToRow(updated)]);
-                    setTrades(p => p.map(t => t.id === selected.id ? updated : t));
-                    setSelected(updated); setFeedback("✅ 매매로 전환됨"); watchToggledRef.current = true;
-                  }} style={{ padding: "4px 10px", background: "#27ae60", border: "none", color: "#fff", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>매매로 전환</button>
-                ) : (
-                  <button onClick={async () => {
-                    const updated = { ...selected, isWatched: true };
-                    await sbUpsert("trades", [tradeToRow(updated)]);
-                    setTrades(p => p.map(t => t.id === selected.id ? updated : t));
-                    setSelected(updated); setFeedback("✅ 관심종목으로 이동됨"); watchToggledRef.current = true;
-                  }} style={{ padding: "4px 10px", background: "#7a6000", border: "none", color: "#f39c12", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>관심종목으로</button>
-                )}
+                <span style={{ marginLeft: "auto", fontSize: 18, fontWeight: 700, color: pnlColor(parseFloat(selected.pnlRate)) }}>{parseFloat(selected.pnlRate) > 0 ? "+" : ""}{selected.pnlRate}%</span>
                 <button onClick={() => { setEditForm({ ...selected }); setEditTrade(true); setFeedback(""); setDeleteConfirmId(null); }}
                   style={{ padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>수정</button>
                 <button onClick={handleDuplicate}
@@ -2985,20 +2936,21 @@ function StatsTab() {
   const [groupMode, setGroupMode] = useState("detail");
 
   useEffect(() => {
-    sbGetTrades().then(rows => { setTrades(rows.map(rowToTrade).filter(t => !t.isWatched)); setLoading(false); }).catch(() => setLoading(false));
+    sbGetTrades().then(rows => { setTrades(rows.map(rowToTrade)); setLoading(false); }).catch(() => setLoading(false));
   }, []);
 
   if (loading) return <div style={{ color: "#555", padding: 40, textAlign: "center" }}>로딩 중...</div>;
   if (!trades.length) return <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>매매 데이터 없음</div>;
 
-  const total = trades.length;
-  const wins = trades.filter(t => parseFloat(t.pnlRate) > 0).length;
+  const scored = trades.filter(t => t.pnlRate !== "" && t.pnlRate != null && t.pnlRate !== undefined);
+  const total = scored.length;
+  const wins = scored.filter(t => parseFloat(t.pnlRate) > 0).length;
   const totalPnl = trades.reduce((s, t) => s + (parseFloat(t.pnl) || 0), 0);
-  const avgRate = (trades.reduce((s, t) => s + (parseFloat(t.pnlRate) || 0), 0) / total).toFixed(2);
+  const avgRate = total ? (scored.reduce((s, t) => s + (parseFloat(t.pnlRate) || 0), 0) / total).toFixed(2) : "0.00";
 
   const aggregate = (keyFn) => {
     const m = {};
-    trades.forEach(t => {
+    scored.forEach(t => {
       const k = keyFn(t);
       if (!m[k]) m[k] = { total: 0, wins: 0, pnl: 0 };
       m[k].total++; if (parseFloat(t.pnlRate) > 0) m[k].wins++; m[k].pnl += parseFloat(t.pnl) || 0;
