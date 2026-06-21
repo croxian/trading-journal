@@ -238,6 +238,26 @@ const parseJSON = async (text) => {
 };
 const toBase64 = (file) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = () => rej(new Error("파일 읽기 실패")); r.readAsDataURL(file); });
 
+// 텍스트 OCR용: PNG 무손실 변환 (한글 글자 오독 방지)
+const compressImageForOCR = (file, maxPx = 3000) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onerror = () => reject(new Error("파일 읽기 실패"));
+  reader.onload = (ev) => {
+    const img = new Image();
+    img.onerror = () => reject(new Error("이미지 로드 실패"));
+    img.onload = () => {
+      const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL("image/png").split(",")[1]);
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+});
+
 // 이미지를 JPEG로 압축/리사이즈 (대용량 이미지 → API 요청 크기 초과 방지)
 const compressImage = (file, maxPx = 2048) => new Promise((resolve, reject) => {
   const reader = new FileReader();
@@ -1077,10 +1097,10 @@ function JournalTab({ techniques }) {
   };
 
   const extract0397Trades = async (file) => {
-    const b64 = await compressImage(file);
+    const b64 = await compressImageForOCR(file);
     const raw = await claude("JSON만 출력.", [
-      { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
-      { type: "text", text: `키움 [0328] 매매일지에서 JSON 추출. 먼저 테이블에 보이는 데이터 행의 총 개수를 정확히 세어라. trades 배열의 길이는 그 개수와 반드시 일치해야 한다. 동일 종목이 여러 행에 걸쳐 있고 값이 비슷하거나 같아도 절대 합치거나 생략하지 말고 행마다 개별 객체로 모두 포함. 종목명이 첫 행에만 표시되고 이후 행이 비어있는 경우(셀 병합) 위 행과 동일한 종목명으로 채워서 출력. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"rowCount":보이는행개수,"date":"YYYY-MM-DD 또는 null","trades":[{"date":"YYYY-MM-DD 또는 null","stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}` }
+      { type: "image", source: { type: "base64", media_type: "image/png", data: b64 } },
+      { type: "text", text: `키움 [0328] 매매일지 테이블에서 JSON 추출.\n\n[중요] 종목명은 한국 주식 종목명이다. 픽셀을 정밀하게 읽어 한 글자씩 정확히 인식할 것. 비슷하게 생긴 한글 자모를 혼동하지 말 것(예: ㅎ↔ㄹ, ㅇ↔ㅁ, 흥↔홀, 아↔마 등). 의심스러우면 여러 번 확인 후 가장 그럴듯한 한국 주식 종목명으로 출력.\n\n먼저 테이블에 보이는 데이터 행의 총 개수를 정확히 세어라. trades 배열의 길이는 그 개수와 반드시 일치해야 한다. 동일 종목이 여러 행에 걸쳐 있고 값이 비슷하거나 같아도 절대 합치거나 생략하지 말고 행마다 개별 객체로 모두 포함. 종목명이 첫 행에만 표시되고 이후 행이 비어있는 경우(셀 병합) 위 행과 동일한 종목명으로 채워서 출력. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"rowCount":보이는행개수,"date":"YYYY-MM-DD 또는 null","trades":[{"date":"YYYY-MM-DD 또는 null","stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}` }
     ], 4096, 0);
     const p = await parseJSON(raw);
     const trades = fillMergedStockCells(Array.isArray(p) ? p : (p.trades || []));
