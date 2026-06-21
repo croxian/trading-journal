@@ -2212,18 +2212,12 @@ function JournalTab({ techniques }) {
               } else {
                 setEditImgLoading(true); setFeedback("");
                 try {
-                  const b64 = await compressImage(files[0]);
-                  const raw = await claude("JSON만 출력.", [
-                    { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
-                    { type: "text", text: `키움 [0328] 매매일지에서 JSON 추출. 먼저 테이블에 보이는 데이터 행의 총 개수를 정확히 세어라. trades 배열의 길이는 그 개수와 반드시 일치해야 한다. 동일 종목이 여러 행에 걸쳐 있고 값이 비슷하거나 같아도 절대 합치거나 생략하지 말고 행마다 개별 객체로 모두 포함. 종목명이 첫 행에만 표시되고 이후 행이 비어있는 경우(셀 병합) 위 행과 동일한 종목명으로 채워서 출력. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"rowCount":보이는행개수,"date":"YYYY-MM-DD 또는 null","trades":[{"date":"YYYY-MM-DD 또는 null","stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}` }
-                  ], 4096, 0);
-                  const p = await parseJSON(raw);
-                  const tl = fillMergedStockCells(Array.isArray(p) ? p : (p.trades || []));
-                  const rowCountWarn = (!Array.isArray(p) && p.rowCount && p.rowCount !== tl.length) ? ` ⚠️ 행 개수 불일치(이미지 ${p.rowCount}행 vs 추출 ${tl.length}행) - 다시 시도해보세요` : "";
-                  const matches = editForm?.stock ? tl.filter(t => matchStock(t.stock, editForm.stock)) : [];
-                  const m = merge0397Rows(matches.length > 0 ? matches : (editForm?.stock ? [] : tl.slice(0, 1)));
+                  const { trades, rowCount } = await extract0397Trades(files[0]);
+                  const rowCountWarn = (rowCount && rowCount !== trades.length) ? ` ⚠️ 행 개수 불일치(이미지 ${rowCount}행 vs 추출 ${trades.length}행) - 다시 시도해보세요` : "";
+                  const matches = editForm?.stock ? trades.filter(t => matchStock(t.stock, editForm.stock)) : [];
+                  const m = merge0397Rows(matches.length > 0 ? matches : (editForm?.stock ? [] : trades.slice(0, 1)));
                   if (m) { setEditForm(f => ({ ...f, buyPrice: m.buyPrice ?? f.buyPrice, sellPrice: m.sellPrice ?? f.sellPrice, pnl: m.pnl ?? f.pnl, pnlRate: m.pnlRate ?? f.pnlRate, amount: m.buyAmount ?? f.amount })); setFeedback((matches.length > 1 ? `✅ ${matches.length}건 머지됨` : "✅ 재무 데이터 채워짐") + rowCountWarn); }
-                  else setFeedback(`❌ '${editForm?.stock || ""}' 매칭 종목 없음 (추출: ${tl.map(t => t.stock).join(", ")})${rowCountWarn}`);
+                  else setFeedback(`❌ '${editForm?.stock || ""}' 매칭 없음 (추출: ${trades.map(t => t.stock).join(", ")})${rowCountWarn}`);
                 } catch (err) { setFeedback(`❌ ${err.message}`); }
                 setEditImgLoading(false);
               }
