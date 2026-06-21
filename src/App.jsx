@@ -1545,7 +1545,7 @@ function JournalTab({ techniques }) {
 
   return (
     <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+      <div style={{ position: "sticky", top: isMobile ? 76 : 45, zIndex: 90, background: "#0f1117", paddingTop: 8, paddingBottom: 8, marginBottom: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         {[
           ["trades", `📋 매매 (${trades.filter(t => !t.isWatched).length})`],
           ["watchlist", `👀 관심종목 (${trades.filter(t => t.isWatched).length})`],
