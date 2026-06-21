@@ -1997,19 +1997,18 @@ function JournalTab({ techniques }) {
           return (
             <div key={t.id} id={`trade-row-${t.id}`}
               onClick={() => selectMode ? toggleSelect(t.id) : openDetail(t)}
-              style={{ ...box, cursor: "pointer", borderColor: checked ? "#e74c3c" : isWatch ? "#3a3a2a" : "#2a2d3a", background: checked ? "#2a1a1a" : "#1a1d27", scrollMarginTop: isMobile ? 90 : 50 }}
-              onMouseEnter={e => { if (!checked) e.currentTarget.style.borderColor = isWatch ? "#f39c12" : "#4f8ef7"; }}
-              onMouseLeave={e => { if (!checked) e.currentTarget.style.borderColor = isWatch ? "#3a3a2a" : "#2a2d3a"; }}>
+              style={{ ...box, cursor: "pointer", borderColor: checked ? "#e74c3c" : "#2a2d3a", background: checked ? "#2a1a1a" : "#1a1d27", scrollMarginTop: isMobile ? 90 : 50 }}
+              onMouseEnter={e => { if (!checked) e.currentTarget.style.borderColor = "#4f8ef7"; }}
+              onMouseLeave={e => { if (!checked) e.currentTarget.style.borderColor = "#2a2d3a"; }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 {selectMode && (
                   <input type="checkbox" checked={checked} readOnly
                     style={{ accentColor: "#e74c3c", width: 15, height: 15, cursor: "pointer", flexShrink: 0 }} />
                 )}
-                {isWatch && <span style={{ fontSize: 11, color: "#f39c12" }}>👀</span>}
                 <span style={{ fontWeight: 700 }}>{t.stock}</span>
                 {!groupByDate && <span style={{ fontSize: 12, color: "#666" }}>{t.date}</span>}
                 {t.technique && <span style={{ background: categoryColor(t.technique), fontSize: 11, padding: "2px 7px", borderRadius: 4, color: "#fff" }}>{t.technique}</span>}
-                {!isWatch && <span style={{ marginLeft: "auto", fontWeight: 700, color: pnlColor(parseFloat(t.pnlRate)) }}>{parseFloat(t.pnlRate) > 0 ? "+" : ""}{t.pnlRate}%</span>}
+                <span style={{ marginLeft: "auto", fontWeight: 700, color: pnlColor(parseFloat(t.pnlRate)) }}>{parseFloat(t.pnlRate) > 0 ? "+" : ""}{t.pnlRate}%</span>
               </div>
               {t.reason && <div style={{ marginTop: 5, fontSize: 12, color: "#666", textAlign: "left" }}>{t.reason.slice(0, 80)}{t.reason.length > 80 ? "..." : ""}</div>}
             </div>
@@ -2041,11 +2040,11 @@ function JournalTab({ techniques }) {
             {sortedDates.map(date => (
               <div key={date} id={`date-sec-${date}`} style={{ scrollMarginTop: isMobile ? 90 : 50 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 2px", borderBottom: "1px solid #2a2d3a", marginBottom: 6 }}>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: isWatch ? "#f39c12" : "#4f8ef7" }}>📅 {date}</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "#4f8ef7" }}>📅 {date}</span>
                   <span style={{ fontSize: 11, color: "#555" }}>{grouped[date].length}건</span>
-                  {!isWatch && <span style={{ marginLeft: "auto", fontSize: 12, fontWeight: 600, color: pnlColor(dayPnl(grouped[date])) }}>
+                  <span style={{ marginLeft: "auto", fontSize: 12, fontWeight: 600, color: pnlColor(dayPnl(grouped[date])) }}>
                     {dayPnl(grouped[date]) >= 0 ? "+" : ""}{dayPnl(grouped[date]).toLocaleString()}원
-                  </span>}
+                  </span>
                 </div>
                 <div style={{ display: "grid", gap: 6, marginBottom: 10 }}>{grouped[date].map(TradeRow)}</div>
               </div>
