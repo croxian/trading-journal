@@ -203,10 +203,10 @@ const filterKakaoText = (raw) => {
 };
 
 const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_KEY || "";
-const claude = async (system, userContent, maxTokens = 1000, temperature) => {
+const claude = async (system, userContent, maxTokens = 1000, temperature, model = "claude-sonnet-4-6") => {
   const headers = { "Content-Type": "application/json", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" };
   if (ANTHROPIC_KEY) headers["x-api-key"] = ANTHROPIC_KEY;
-  const body = JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: maxTokens, system, messages: [{ role: "user", content: userContent }], ...(temperature !== undefined ? { temperature } : {}) });
+  const body = JSON.stringify({ model, max_tokens: maxTokens, system, messages: [{ role: "user", content: userContent }], ...(temperature !== undefined ? { temperature } : {}) });
   const RETRYABLE = new Set([500, 529]);
   for (let attempt = 0; attempt < 3; attempt++) {
     let res;
@@ -1341,7 +1341,7 @@ function JournalTab({ techniques }) {
       });
 
       const result = await claude("주식 매매 분석 전문가. 핵심만 간결하게. 분석은 반드시 [적용 기법 강의록] 내용에 근거하고, 강의록에 없는 내용을 일반론으로 단정하지 않는다. 차트 이미지가 없으면 차트 관련 내용을 지어내지 않는다. 차트에서 보이는 내용이 기법 설명과 무관하면 무시한다. [중요] '정답매매'는 사용자가 실제 실행한 매매가 아닌, 해당 기법 기준으로 올바르게 했어야 할 이상적 시나리오다. 절대 실제 매매 내용을 정답매매로 제시하지 않는다.",
-        userContent, 2800);
+        userContent, 2800, undefined, "claude-opus-4-8");
       // 응답 끝에서 SIMILAR:[...] 추출
       const simMatch = result.match(/SIMILAR:\[([\d,\s]*)\]/);
       const analysisText = result.replace(/\n?SIMILAR:\[[\d,\s]*\]\s*$/, '').trim();
