@@ -206,20 +206,26 @@ const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_KEY || "";
 const claude = async (system, userContent, maxTokens = 1000, temperature) => {
   const headers = { "Content-Type": "application/json", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" };
   if (ANTHROPIC_KEY) headers["x-api-key"] = ANTHROPIC_KEY;
-  let res;
-  try {
-    res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST", headers,
-      body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: maxTokens, system, messages: [{ role: "user", content: userContent }], ...(temperature !== undefined ? { temperature } : {}) })
-    });
-  } catch (e) { throw new Error(`네트워크 오류 (CORS/연결): ${e.message}`); }
-  if (!res.ok) {
+  const body = JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: maxTokens, system, messages: [{ role: "user", content: userContent }], ...(temperature !== undefined ? { temperature } : {}) });
+  const RETRYABLE = new Set([500, 529]);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let res;
+    try {
+      res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body });
+    } catch (e) { throw new Error(`네트워크 오류 (CORS/연결): ${e.message}`); }
+    if (res.ok) {
+      const data = await res.json();
+      return data.content?.map(b => b.text || "").join("") || "";
+    }
+    if (RETRYABLE.has(res.status) && attempt < 2) {
+      const wait = res.status === 529 ? 8000 : 4000;
+      await new Promise(r => setTimeout(r, wait * (attempt + 1)));
+      continue;
+    }
     let msg = res.status;
     try { const d = await res.json(); msg = d.error?.message || msg; } catch {}
     throw new Error(`API 오류 ${res.status}: ${msg}`);
   }
-  const data = await res.json();
-  return data.content?.map(b => b.text || "").join("") || "";
 };
 const parseJSON = async (text) => {
   const m = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
@@ -1304,7 +1310,8 @@ function JournalTab({ techniques }) {
         (selected.technique === "투경해제" ? " 단, '투경해제' 기법은 일봉(daily) 차트를 쓰는 경우가 있으며, 이때는 가로축 라벨 전체가 연/월 단위(예: 2026/03, 04, 05)로 표시되므로 위 규칙이 아닌 연/월 단위로 해석할 것." : "");
       const chartMarkupNote = "\n- 차트에 표시된 도형 해석: 파란/빨간 오각형(B/S 글자)은 사용자가 실제로 체결한 매수(B)/매도(S) 지점이다. '세력의 매수/매도 물량 출현' 같은 추측성 해석을 붙이지 말 것. 사각형(네모) 표시는 강의록 기법 기준 정답매매의 이상적 매수(진입) 타점, 동그라미(원/타원) 표시는 정답매매의 이상적 매도(청산) 타점이다. 이 도형들이 보이면 실제 매매(B/S) 위치와 정답매매(네모/동그라미) 위치를 비교해 진입/청산 타이밍 차이를 분석에 활용하고, 보이지 않으면 언급하지 말 것." +
         "\n- 차트는 좌→우로 시간이 흐른다. 분석 대상일의 시가가 그 직전에 표시된 캔들들의 가격대보다 위/아래에서 시작했다면 갭상승/갭하락으로 언급 가능하나, 차트에 직접 보이지 않는 '전일 종가 마감 방향' 같은 사실을 추정해서 단정하지 말 것." +
-        "\n- 가로축에서 MM/DD 형식의 날짜 라벨이 두 개 이상 보이면 차트에 두 개의 거래일이 함께 표시된 것이다. 이 경우 가장 오른쪽 날짜가 당일, 그 왼쪽 날짜가 전일이다. 분석 시 전일 흐름과 당일 흐름을 구분하여 각각 언급할 것. 날짜 라벨이 하나뿐이면 단일 거래일 차트이므로 이 규칙은 무시할 것.";
+        "\n- 가로축에서 MM/DD 형식의 날짜 라벨이 두 개 이상 보이면 차트에 두 개의 거래일이 함께 표시된 것이다. 이 경우 가장 오른쪽 날짜가 당일, 그 왼쪽 날짜가 전일이다. 분석 시 전일 흐름과 당일 흐름을 구분하여 각각 언급할 것. 날짜 라벨이 하나뿐이면 단일 거래일 차트이므로 이 규칙은 무시할 것." +
+        (selected.technique === "상따" ? "\n- [상따 기법 규칙] 날짜 라벨이 두 개인 경우, 전일 차트는 상한가(당일 최고가 +30% 또는 가격제한폭 도달)로 마감한 것이다. 전일 마지막 캔들이 상한가 부근에서 마감되었음을 전제로 분석할 것. 당일은 상한가 다음날로서 시가(갭상승 또는 보합 출발)와 이후 주가 흐름을 중점 분석할 것." : "");
       const imageNote = (selected.chartImg || liveImageBlocks.length)
         ? `[첨부 이미지]${selected.chartImg ? `\n- 이 매매의 차트 이미지 (캔들 모양, 진입/이탈 시간대 분석에 활용)${chartAxisNote}${chartMarkupNote}` : ""}${liveImageBlocks.length ? `\n- 동일 날짜 실전매매 관련 이미지 ${liveImageBlocks.length}장` : ""}\n이미지에서 실제로 확인 가능한 내용만 사용하고, 기법 설명과 무관하거나 불확실한 내용은 언급하지 말 것.`
         : `[첨부 이미지] 없음. 차트 기반 분석(봉 모양, 시간대 등)은 시도하지 말고 '차트 없음'으로만 명시할 것. 추측해서 지어내지 말 것.`;
