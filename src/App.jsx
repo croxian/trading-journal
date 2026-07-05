@@ -1182,9 +1182,10 @@ function JournalTab({ techniques }) {
     try {
       const { trades, rowCount } = await extract0397Trades(file);
       const rowCountWarn = (rowCount && rowCount !== trades.length) ? ` ⚠️ 행 개수 불일치(이미지 ${rowCount}행 vs 추출 ${trades.length}행) - 다시 시도해보세요` : "";
-      const match = form.stock
-        ? trades.find(t => matchStock(t.stock, form.stock))
-        : trades[0];
+      const matches = form.stock
+        ? trades.filter(t => matchStock(t.stock, form.stock))
+        : trades.slice(0, 1);
+      const match = merge0397Rows(matches);
       if (match) {
         setForm(f => ({
           ...f,
@@ -1194,7 +1195,7 @@ function JournalTab({ techniques }) {
           pnlRate: match.pnlRate ?? f.pnlRate,
           amount: match.buyAmount ?? f.amount,
         }));
-        setFeedback(`✅ 재무 데이터 채워짐${rowCountWarn}`);
+        setFeedback((matches.length > 1 ? `✅ ${matches.length}건 머지됨` : "✅ 재무 데이터 채워짐") + rowCountWarn);
       } else {
         setFeedback(`❌ '${form.stock}' 매칭 종목 없음 (추출: ${trades.map(t => t.stock).join(", ")})${rowCountWarn}`);
       }
@@ -1209,7 +1210,7 @@ function JournalTab({ techniques }) {
       const rowCountWarn = (rowCount && rowCount !== trades.length) ? ` ⚠️ 행 개수 불일치(이미지 ${rowCount}행 vs 추출 ${trades.length}행) - 다시 시도해보세요` : "";
       let matched = 0;
       setPendingPpt(prev => prev.map(entry => {
-        const m = trades.find(t => matchStock(t.stock, entry.stock));
+        const m = merge0397Rows(trades.filter(t => matchStock(t.stock, entry.stock)));
         if (!m) return entry;
         matched++;
         return { ...entry, buyPrice: m.buyPrice ?? "", sellPrice: m.sellPrice ?? "", pnl: m.pnl ?? "", pnlRate: m.pnlRate ?? "", amount: m.buyAmount ?? "" };
@@ -1225,9 +1226,10 @@ function JournalTab({ techniques }) {
       const trades = await parseXlsCsvToTrades(file);
       let matched = 0;
       setPendingPpt(prev => prev.map(entry => {
-        // 날짜+종목명 우선 매칭, 없으면 종목명만
-        const m = trades.find(t => matchStock(t.stock, entry.stock) && t.date === entry.date)
-                || trades.find(t => matchStock(t.stock, entry.stock));
+        // 날짜+종목명 우선 매칭, 없으면 종목명만 (같은 종목 여러 행은 머지)
+        let rows = trades.filter(t => matchStock(t.stock, entry.stock) && t.date === entry.date);
+        if (rows.length === 0) rows = trades.filter(t => matchStock(t.stock, entry.stock));
+        const m = merge0397Rows(rows);
         if (!m) return entry;
         matched++;
         return { ...entry, buyPrice: m.buyPrice || "", sellPrice: m.sellPrice || "", pnl: m.pnl || "", pnlRate: m.pnlRate || "", amount: m.buyAmount || "" };
