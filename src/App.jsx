@@ -1343,7 +1343,7 @@ function JournalTab({ techniques }) {
       });
 
       const result = await claude("주식 매매 분석 전문가. 핵심만 간결하게. 분석은 반드시 [적용 기법 강의록] 내용에 근거하고, 강의록에 없는 내용을 일반론으로 단정하지 않는다. 차트 이미지가 없으면 차트 관련 내용을 지어내지 않는다. 차트에서 보이는 내용이 기법 설명과 무관하면 무시한다. [중요] '정답매매'는 사용자가 실제 실행한 매매가 아닌, 해당 기법 기준으로 올바르게 했어야 할 이상적 시나리오다. 절대 실제 매매 내용을 정답매매로 제시하지 않는다.",
-        userContent, 2800, undefined, "claude-opus-4-8");
+        userContent, 2800, undefined, "claude-fable-5");
       // 응답 끝에서 SIMILAR:[...] 추출
       const simMatch = result.match(/SIMILAR:\[([\d,\s]*)\]/);
       const analysisText = result.replace(/\n?SIMILAR:\[[\d,\s]*\]\s*$/, '').trim();
@@ -2549,7 +2549,7 @@ function RealTradeTab() {
       const result = await claude(
         "주식 실전매매 분석 전문가. 카카오톡 매매 메시지를 분석하여 핵심 매매 패턴과 의도를 파악한다.",
         `[현재 실전매매]\n종목:${selected.stock} 날짜:${selected.date}\n내용:\n${selected.textContent}\n\n[과거 실전매매 참고]\n${pastText || "(없음)"}\n\n아래 항목을 분석:\n1. 매매 의도 및 전략\n2. 핵심 판단 근거\n3. 과거 유사 매매와 비교\n\n※ 응답 맨 마지막 줄에 과거 유사 매매 중 가장 유사한 것 최대 5개의 ID를 아래 형식으로만 출력(다른 텍스트 없이): SIMILAR:[id1,id2,...]`,
-        2000, undefined, "claude-opus-4-8"
+        2000, undefined, "claude-fable-5"
       );
       const simMatch = result.match(/SIMILAR:\[([\d,\s]*)\]/);
       const analysisText = result.replace(/\n?SIMILAR:\[[\d,\s]*\]\s*$/, '').trim();
