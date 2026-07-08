@@ -2490,7 +2490,7 @@ function RealTradeTab() {
       const result = await claude(
         "주식 실전매매 메시지 요약 전문가. 핵심 내용을 2-3문장으로 간결하게 요약.",
         `다음 실전매매 카카오톡 메시지를 요약해주세요:\n\n${selected.textContent}`,
-        800
+        800, undefined, "claude-fable-5"
       );
       setAiSummary(result.trim());
     } catch (e) { setFeedback(`❌ ${e.message}`); }
