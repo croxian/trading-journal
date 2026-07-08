@@ -581,9 +581,21 @@ function DashboardTab({ onNavigate }) {
   );
 }
 
-const LECTURE_SYSTEM = `단기 주식 매매 강의록을 구조화하는 전문가. 반드시 JSON만 출력.
-입력 전처리: 인사말/감사/광고/잡담 제거.
-{"name":"기법 이름","category":"갭하락매수|돌파매매|눌림매수|상한가하락시작|기타","timeframe":"3분봉 등","entry":{"condition":"","position":"","caution":""},"exit":{"profit":"","loss":""},"pattern":{"before":"","trigger":"","after":""},"tags":[],"notes":""}`;
+const LECTURE_SYSTEM = `당신은 단기 주식 매매 강의록을 구조화하는 전문가다. 주어진 강의록 원문에서 실전 매매에 필요한 정보를 빠짐없이 추출하여 JSON으로 정리한다.
+
+[원칙]
+- 입력 전처리: 인사말/감사/광고/잡담 제거.
+- 원문의 구체적 수치를 절대 누락하지 말 것: 매수/매도 % 기준, 손절(-%), 익절(+%), 비중(만원/%), 거래대금 기준, 시간대(오전상/10시/3시20분 등), 분할 횟수 등.
+- 원문에 없는 내용은 지어내지 말 것. 근거 없으면 빈 문자열("").
+- 실전에서 바로 적용 가능하도록 조건과 수치를 명확히 서술.
+
+[출력 JSON 스키마 - 이 구조만 출력]
+{"name":"기법 이름","category":"기법 분류(예: 상따, 음봉매매, 종가배팅, 눌림매수, 저평가매수, 상한가하락시작 등. 복합이면 / 로 구분)","timeframe":"사용 봉/시간대","entry":{"condition":"매수 진입 조건(종목선정 기준 포함, 수치와 함께)","position":"매수 타점/비중(분할매수 방식, 금액/비율)","caution":"매수 주의사항/제외 조건"},"exit":{"profit":"익절 기준·분할매도 방식(구체적 %와 횟수)","loss":"손절 기준(구체적 % 및 상황)"},"pattern":{"before":"진입 직전 차트/시장 상황","trigger":"매수 실행 방아쇠 조건","after":"진입 후 예상 흐름 및 대응"},"tags":["검색용 키워드 5~12개"],"notes":"핵심 인사이트·매매 심리·꼭 지킬 원칙(3~6줄, 줄바꿈은 \\n)"}
+
+[JSON 형식 필수 규칙]
+- 문자열 값 안에서 큰따옴표(") 금지. 강조는 작은따옴표(') 또는 「」 사용.
+- 값 안 줄바꿈은 반드시 \\n 으로 이스케이프.
+- 반드시 유효한 JSON만 출력. 코드블록/설명 금지.`;
 
 function LectureTab() {
   const [techniques, setTechniques] = useState([]);
@@ -622,7 +634,7 @@ function LectureTab() {
     if (!input.trim()) return;
     setSaving(true); setFeedback("");
     try {
-      const raw = await claude(LECTURE_SYSTEM, input, 1500);
+      const raw = await claude(LECTURE_SYSTEM, input, 4000, undefined, "claude-fable-5");
       const parsed = await parseJSON(raw);
       parsed.id = Date.now(); parsed.createdAt = new Date().toLocaleDateString("ko-KR"); parsed.rawInput = input;
       await sbUpsert("techniques", [techToRow(parsed)]);
