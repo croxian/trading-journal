@@ -30,10 +30,18 @@ const sbPatch = async (id, data) => {
   const r = await fetch(`${SB_URL}/rest/v1/trades?id=eq.${id}`, { method: "PATCH", headers: HDR2, body: JSON.stringify(data) });
   if (!r.ok) throw new Error(await r.text());
 };
+// 목록 조회 시 이미지(base64)는 제외 - 대용량 payload 타임아웃 방지 (상세에서 지연 로딩)
+const LIVE_LIST_FIELDS = "id,title,stock,date,text_content,summary,ai_analysis,created_at,deleted_at";
 const sbGetLiveTrades = async () => {
-  const r = await fetch(`${SB_URL}/rest/v1/live_trades?select=*&deleted_at=is.null&order=id.desc`, { headers: HDR });
+  const r = await fetch(`${SB_URL}/rest/v1/live_trades?select=${LIVE_LIST_FIELDS}&deleted_at=is.null&order=id.desc`, { headers: HDR });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
+};
+const sbGetLiveImages = async (id) => {
+  const r = await fetch(`${SB_URL}/rest/v1/live_trades?id=eq.${id}&select=images`, { headers: HDR });
+  if (!r.ok) return [];
+  const d = await r.json();
+  try { return JSON.parse(d[0]?.images || "[]"); } catch { return []; }
 };
 const sbPatchLive = async (id, data) => {
   const HDR2 = { ...HDR, Prefer: "return=minimal" };
@@ -613,6 +621,10 @@ function LectureTab() {
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const scrollTargetRef = useScrollRestore(view);
   const isMobile = useIsMobile();
+  const techsRef = useRef([]);
+  const selectedRef = useRef(null);
+  useEffect(() => { techsRef.current = techniques; }, [techniques]);
+  useEffect(() => { selectedRef.current = selected; }, [selected]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -621,6 +633,35 @@ function LectureTab() {
     setLoading(false);
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  const openDetail = (t) => {
+    if (window.history.state?.techId !== t.id)
+      window.history.pushState({ ...(window.history.state || {}), techView: "detail", techId: t.id }, "");
+    setSelected(t); setView("detail"); setFeedback("");
+  };
+  const backToList = () => {
+    window.history.replaceState({ ...(window.history.state || {}), techView: "list", techId: undefined }, "");
+    if (selected) scrollTargetRef.current = `tech-row-${selected.id}`;
+    setView("list"); setSelected(null); setEditMode(false); setFeedback(""); setDeleteConfirm(false);
+  };
+
+  // 브라우저 뒤로가기: 상세 → 목록
+  useEffect(() => {
+    window.history.replaceState({ ...(window.history.state || {}), techView: "list" }, "");
+    const handlePop = (e) => {
+      const s = e.state || {};
+      if (s.techView === "detail" && s.techId) {
+        const t = techsRef.current.find(x => x.id === s.techId);
+        if (t) { setSelected(t); setView("detail"); setFeedback(""); }
+      } else if (selectedRef.current) {
+        scrollTargetRef.current = `tech-row-${selectedRef.current.id}`;
+        setView("list"); setSelected(null); setEditMode(false); setFeedback(""); setDeleteConfirm(false);
+      }
+    };
+    window.addEventListener("popstate", handlePop);
+    return () => window.removeEventListener("popstate", handlePop);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const extractPdf = async (file) => {
     const b64 = await toBase64(file);
@@ -717,7 +758,7 @@ function LectureTab() {
           ? <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>저장된 기법 없음</div>
           : <div style={{ display: "grid", gap: 10 }}>
             {techniques.map(t => (
-              <div key={t.id} id={`tech-row-${t.id}`} onClick={() => { setSelected(t); setView("detail"); setFeedback(""); }}
+              <div key={t.id} id={`tech-row-${t.id}`} onClick={() => openDetail(t)}
                 style={{ ...box, cursor: "pointer", scrollMarginTop: isMobile ? 90 : 50 }}
                 onMouseEnter={e => e.currentTarget.style.borderColor = "#4f8ef7"}
                 onMouseLeave={e => e.currentTarget.style.borderColor = "#2a2d3a"}>
@@ -737,7 +778,7 @@ function LectureTab() {
 
       {!loading && view === "detail" && selected && (
         <div>
-          <button onClick={() => { if (selected) scrollTargetRef.current = `tech-row-${selected.id}`; setView("list"); setSelected(null); setEditMode(false); setFeedback(""); setDeleteConfirm(false); }}
+          <button onClick={backToList}
             style={{ background: "none", border: "none", color: "#4f8ef7", cursor: "pointer", fontSize: 13, marginBottom: 12 }}>← 목록</button>
           {!editMode ? (
             <div style={box}>
@@ -1299,9 +1340,12 @@ function JournalTab({ techniques }) {
         if (liveMatches.length) {
           liveSection = liveMatches.map(t => `[${t.stock}]${t.title ? ` ${t.title}` : ""}\n${(t.textContent || "").slice(0, 400)}`).join('\n---\n');
           const sameStock = liveMatches.filter(t => matchStock(t.stock, selected.stock));
-          (sameStock.length ? sameStock : liveMatches).forEach(t =>
-            (t.images || []).slice(0, 2).forEach(b64 => liveImageBlocks.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } }))
-          );
+          // 목록 조회는 이미지를 제외하므로, 매칭된 실전매매의 이미지는 개별 지연 로딩
+          const imgTargets = sameStock.length ? sameStock : liveMatches;
+          for (const t of imgTargets) {
+            const imgs = await sbGetLiveImages(t.id);
+            imgs.slice(0, 2).forEach(b64 => liveImageBlocks.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } }));
+          }
         }
       } catch {}
 
@@ -2440,6 +2484,10 @@ function RealTradeTab() {
   const editImgPasteRef = useRef(null);
   const scrollTargetRef = useScrollRestore(view);
   const isMobile = useIsMobile();
+  const lTradesRef = useRef([]);
+  const selectedRef = useRef(null);
+  useEffect(() => { lTradesRef.current = lTrades; }, [lTrades]);
+  useEffect(() => { selectedRef.current = selected; }, [selected]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -2450,6 +2498,24 @@ function RealTradeTab() {
     setLoading(false);
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  // 브라우저 뒤로가기: 상세 → 목록
+  useEffect(() => {
+    window.history.replaceState({ ...(window.history.state || {}), liveView: "list" }, "");
+    const handlePop = (e) => {
+      const s = e.state || {};
+      if (s.liveView === "detail" && s.liveId) {
+        const t = lTradesRef.current.find(x => x.id === s.liveId);
+        if (t) openDetail(t);
+      } else if (selectedRef.current) {
+        scrollTargetRef.current = `live-row-${selectedRef.current.id}`;
+        setView("list"); setSelected(null); setFeedback(""); setEditTrade(false);
+      }
+    };
+    window.addEventListener("popstate", handlePop);
+    return () => window.removeEventListener("popstate", handlePop);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 날짜 이동: 날짜별 보기로 전환 후 해당 날짜 섹션으로 스크롤
   useEffect(() => {
@@ -2477,10 +2543,21 @@ function RealTradeTab() {
       .map(({ t }) => t);
   };
 
-  const openDetail = (trade) => {
+  const openDetail = async (trade) => {
+    if (window.history.state?.liveId !== trade.id)
+      window.history.pushState({ ...(window.history.state || {}), liveView: "detail", liveId: trade.id }, "");
     setSelected(trade); setView("detail"); setFeedback(""); setEditTrade(false);
     setAiAnalysis(""); setSimilarTrades(trade.aiAnalysis ? calcSimilar(trade, lTrades) : []);
     setImgIdx(0); setImgScale(1); setContentTab("summary"); setAiSummary("");
+    // 이미지는 목록에서 제외되므로 상세 진입 시 지연 로딩 (이미 있으면 스킵)
+    if (!trade.images || trade.images.length === 0) {
+      const imgs = await sbGetLiveImages(trade.id);
+      if (imgs.length) {
+        const withImgs = { ...trade, images: imgs };
+        setSelected(s => (s && s.id === trade.id ? { ...s, images: imgs } : s));
+        setLTrades(p => p.map(t => t.id === trade.id ? withImgs : t));
+      }
+    }
   };
 
   const generateSummary = async () => {
@@ -2583,7 +2660,7 @@ function RealTradeTab() {
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
-        <button onClick={() => { if (selected) scrollTargetRef.current = `live-row-${selected.id}`; setView("list"); setSelected(null); setFeedback(""); }}
+        <button onClick={() => { window.history.replaceState({ ...(window.history.state || {}), liveView: "list", liveId: undefined }, ""); if (selected) scrollTargetRef.current = `live-row-${selected.id}`; setView("list"); setSelected(null); setFeedback(""); }}
           style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: view === "list" && !selected ? "#e74c3c" : "#2a2d3a", color: view === "list" && !selected ? "#fff" : "#aaa" }}>
           📋 목록 ({lTrades.length})
         </button>
