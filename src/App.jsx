@@ -419,6 +419,23 @@ const box = { background: "#1a1d27", borderRadius: 10, border: "1px solid #2a2d3
 const label11 = { fontSize: 11, color: "#555", marginBottom: 3, textAlign: "left" };
 const val14 = { fontSize: 14, color: "#ddd", background: "#13151f", padding: "8px 10px", borderRadius: 6, whiteSpace: "pre-wrap", lineHeight: 1.6, textAlign: "left" };
 
+// AI 분석 텍스트(마크다운)를 간단히 렌더링 - **볼드**, ## 헤더, - 불릿, 줄바꿈 처리
+const MD = ({ text }) => {
+  if (!text) return null;
+  const inline = (s) => String(s).split(/(\*\*[^*]+\*\*)/g).map((p, i) => {
+    const m = p.match(/^\*\*([\s\S]+)\*\*$/);
+    return m ? <strong key={i} style={{ color: "#fff" }}>{m[1]}</strong> : <span key={i}>{p}</span>;
+  });
+  return <>{String(text).split("\n").map((ln, i) => {
+    const h = ln.match(/^(#{1,4})\s+(.*)$/);
+    if (h) return <div key={i} style={{ fontWeight: 700, color: "#fff", fontSize: h[1].length <= 2 ? 15 : 13, marginTop: i ? 10 : 0, marginBottom: 4 }}>{inline(h[2])}</div>;
+    const b = ln.match(/^\s*[-*]\s+(.*)$/);
+    if (b) return <div key={i} style={{ display: "flex", gap: 6, marginBottom: 3 }}><span style={{ color: "#8e44ad", flexShrink: 0 }}>•</span><span>{inline(b[1])}</span></div>;
+    if (ln.trim() === "") return <div key={i} style={{ height: 6 }} />;
+    return <div key={i} style={{ marginBottom: 3 }}>{inline(ln)}</div>;
+  })}</>;
+};
+
 const useIsMobile = () => {
   const [w, setW] = useState(window.innerWidth);
   useEffect(() => {
@@ -2276,7 +2293,7 @@ function JournalTab({ techniques }) {
                     style={{ width: "100%", minHeight: 320, background: "#0f1a10", border: "1px solid #4caf50", borderRadius: 8, color: "#e0e0e0", padding: 12, fontSize: 13, resize: "vertical", boxSizing: "border-box", lineHeight: 1.7, whiteSpace: "pre-wrap" }}
                   />
                 ) : (
-                  (detailAiAnalysis || selected.aiAnalysis) && <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad", whiteSpace: "pre-wrap", lineHeight: 1.7 }}>{detailAiAnalysis || selected.aiAnalysis}</div>
+                  (detailAiAnalysis || selected.aiAnalysis) && <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad", whiteSpace: "normal", lineHeight: 1.7 }}><MD text={detailAiAnalysis || selected.aiAnalysis} /></div>
                 )}
                 {similarTrades.length > 0 && (
                   <div style={{ marginTop: 10, padding: "10px 12px", background: "#12161e", border: "1px solid #2a2d3a", borderRadius: 8 }}>
@@ -2608,7 +2625,7 @@ function RealTradeTab() {
   };
 
   const handleSave = async () => {
-    if (!form.stock) { setFeedback("❌ 종목명은 필수입니다."); return; }
+    if (!form.textContent && !form.stock && !form.title && (!form.images || form.images.length === 0)) { setFeedback("❌ 내용을 입력하세요."); return; }
     const trade = { ...form, id: Date.now(), createdAt: new Date().toLocaleDateString("ko-KR"), aiAnalysis: "" };
     try {
       await sbUpsert("live_trades", [liveTradeToRow(trade)]);
@@ -2619,7 +2636,6 @@ function RealTradeTab() {
   };
 
   const handleEditSave = async () => {
-    if (!editForm.stock) { setFeedback("❌ 종목명은 필수입니다."); return; }
     try {
       await sbUpsert("live_trades", [liveTradeToRow(editForm)]);
       setLTrades(p => p.map(t => t.id === editForm.id ? editForm : t));
@@ -2636,25 +2652,30 @@ function RealTradeTab() {
   };
 
   const analyzeDetail = async () => {
-    if (!selected?.textContent) { setFeedback("❌ 내용이 없습니다."); return; }
+    const target = selected; // 분석 중 다른 종목으로 이동/이탈해도 원래 대상에 저장
+    if (!target?.textContent) { setFeedback("❌ 내용이 없습니다."); return; }
     setAiLoading(true); setAiAnalysis("");
     try {
-      const pastArr = lTrades.filter(t => t.id !== selected.id && t.textContent).slice(0, 10);
+      const pastArr = lTrades.filter(t => t.id !== target.id && t.textContent).slice(0, 10);
       const pastText = pastArr.map(t => `[ID:${t.id}] ${t.stock}(${t.date}): ${(t.textContent || "").slice(0, 80)}`).join('\n');
       const result = await claude(
         "주식 실전매매 분석 전문가. 카카오톡 매매 메시지를 분석하여 핵심 매매 패턴과 의도를 파악한다.",
-        `[현재 실전매매]\n종목:${selected.stock} 날짜:${selected.date}\n내용:\n${selected.textContent}\n\n[과거 실전매매 참고]\n${pastText || "(없음)"}\n\n아래 항목을 분석:\n1. 매매 의도 및 전략\n2. 핵심 판단 근거\n3. 과거 유사 매매와 비교\n\n※ 응답 맨 마지막 줄에 과거 유사 매매 중 가장 유사한 것 최대 5개의 ID를 아래 형식으로만 출력(다른 텍스트 없이): SIMILAR:[id1,id2,...]`,
+        `[현재 실전매매]\n종목:${target.stock} 날짜:${target.date}\n내용:\n${target.textContent}\n\n[과거 실전매매 참고]\n${pastText || "(없음)"}\n\n아래 항목을 분석:\n1. 매매 의도 및 전략\n2. 핵심 판단 근거\n3. 과거 유사 매매와 비교\n\n※ 응답 맨 마지막 줄에 과거 유사 매매 중 가장 유사한 것 최대 5개의 ID를 아래 형식으로만 출력(다른 텍스트 없이): SIMILAR:[id1,id2,...]`,
         2000, undefined, "claude-fable-5"
       );
       const simMatch = result.match(/SIMILAR:\[([\d,\s]*)\]/);
       const analysisText = result.replace(/\n?SIMILAR:\[[\d,\s]*\]\s*$/, '').trim();
-      setAiAnalysis(analysisText);
-      if (simMatch) {
-        const ids = simMatch[1].split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
-        setSimilarTrades(pastArr.filter(t => ids.includes(t.id)));
-      } else {
-        setSimilarTrades(calcSimilar(selected, lTrades));
-      }
+      // 백그라운드 자동 저장: 페이지를 나가거나 다른 종목을 열어도 원래 대상에 저장되어 유실되지 않음
+      try {
+        await sbPatchLive(target.id, { ai_analysis: analysisText });
+        setLTrades(p => p.map(t => t.id === target.id ? { ...t, aiAnalysis: analysisText } : t));
+        setSelected(s => (s && s.id === target.id ? { ...s, aiAnalysis: analysisText } : s));
+      } catch (e) { setFeedback(`⚠️ 저장 실패(분석은 완료): ${e.message}`); }
+      setAiAnalysis(""); // 저장됨 섹션으로 표시되므로 임시 상태 비움
+      const sims = simMatch
+        ? pastArr.filter(t => { const ids = simMatch[1].split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n)); return ids.includes(t.id); })
+        : calcSimilar(target, lTrades);
+      setSimilarTrades(sims);
     } catch (e) { setFeedback(`❌ ${e.message}`); }
     setAiLoading(false);
   };
@@ -2703,7 +2724,7 @@ function RealTradeTab() {
             </div>
           </div>
           <div style={{ marginBottom: 12 }}>
-            <div style={label11}>종목명 * (콤마로 여러 종목 입력 가능)</div>
+            <div style={label11}>종목명 (선택, 콤마로 여러 종목 입력 가능)</div>
             <input value={form.stock} onChange={e => setForm(f => ({ ...f, stock: e.target.value }))} placeholder="예: 삼성전자, SK하이닉스" style={iStyle} />
           </div>
           <div style={{ marginBottom: 12 }}>
@@ -2929,7 +2950,7 @@ function RealTradeTab() {
                         } catch (e) { setFeedback(`❌ ${e.message}`); }
                       }} style={{ padding: "2px 8px", background: "#3a1a1a", border: "none", color: "#e74c3c", borderRadius: 4, cursor: "pointer", fontSize: 11 }}>삭제</button>
                     </div>
-                    <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad" }}>{selected.aiAnalysis}</div>
+                    <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad", whiteSpace: "normal" }}><MD text={selected.aiAnalysis} /></div>
                   </div>
                 )}
                 <div style={{ marginTop: 4 }}>
@@ -2937,21 +2958,10 @@ function RealTradeTab() {
                     <span style={{ fontSize: 12, color: "#8e44ad", fontWeight: 600 }}>🤖 AI 분석</span>
                     <button onClick={analyzeDetail} disabled={aiLoading}
                       style={{ padding: "3px 12px", background: aiLoading ? "#333" : "#8e44ad", color: "#fff", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>
-                      {aiLoading ? "분석 중..." : aiAnalysis ? "재분석" : "분석 시작"}
+                      {aiLoading ? "분석 중..." : selected.aiAnalysis ? "재분석" : "분석 시작"}
                     </button>
-                    {aiAnalysis && <button onClick={() => setAiAnalysis("")} style={{ padding: "3px 10px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 11 }}>초기화</button>}
-                    {aiAnalysis && (
-                      <button onClick={async () => {
-                        try {
-                          await sbPatchLive(selected.id, { ai_analysis: aiAnalysis });
-                          const updated = { ...selected, aiAnalysis };
-                          setSelected(updated); setLTrades(p => p.map(t => t.id === selected.id ? updated : t));
-                          setFeedback("✅ AI 분석 저장됨");
-                        } catch (e) { setFeedback(`❌ ${e.message}`); }
-                      }} style={{ padding: "3px 12px", background: "#4f8ef7", color: "#fff", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 11 }}>💾 저장</button>
-                    )}
+                    {aiLoading && <span style={{ fontSize: 11, color: "#888" }}>완료 시 자동 저장됩니다. 다른 화면으로 이동해도 됩니다.</span>}
                   </div>
-                  {aiAnalysis && <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad", whiteSpace: "pre-wrap", lineHeight: 1.7 }}>{aiAnalysis}</div>}
                   {similarTrades.length > 0 && (
                     <div style={{ marginTop: 10, padding: "10px 12px", background: "#12161e", border: "1px solid #2a2d3a", borderRadius: 8 }}>
                       <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>📎 AI 선정 유사 실전매매 ({similarTrades.length}건)</div>
@@ -2982,7 +2992,7 @@ function RealTradeTab() {
                   </div>
                 </div>
                 <div style={{ marginBottom: 12 }}>
-                  <div style={label11}>종목명 * (콤마로 여러 종목 입력 가능)</div>
+                  <div style={label11}>종목명 (선택, 콤마로 여러 종목 입력 가능)</div>
                   <input value={editForm.stock || ""} onChange={e => setEditForm(f => ({ ...f, stock: e.target.value }))} placeholder="예: 삼성전자, SK하이닉스" style={iStyle} />
                 </div>
                 <div style={{ marginBottom: 12 }}>
