@@ -2134,7 +2134,16 @@ function JournalTab({ techniques }) {
                 <span style={{ fontWeight: 700 }}>{t.stock}</span>
                 {!groupByDate && <span style={{ fontSize: 12, color: "#666" }}>{t.date}</span>}
                 {t.technique && <span style={{ background: categoryColor(t.technique), fontSize: 11, padding: "2px 7px", borderRadius: 4, color: "#fff" }}>{t.technique}</span>}
-                <span style={{ marginLeft: "auto", fontWeight: 700, color: pnlColor(parseFloat(t.pnlRate)) }}>{parseFloat(t.pnlRate) > 0 ? "+" : ""}{t.pnlRate}%</span>
+                <span style={{ marginLeft: "auto", display: "flex", alignItems: "baseline", gap: 6 }}>
+                  {t.pnl !== "" && t.pnl != null && (
+                    <span style={{ fontSize: 13, fontWeight: 700, color: pnlColor(parseFloat(String(t.pnl).replace(/,/g, ""))) }}>
+                      {parseFloat(String(t.pnl).replace(/,/g, "")) > 0 ? "+" : ""}{Math.round(parseFloat(String(t.pnl).replace(/,/g, ""))).toLocaleString()}원
+                    </span>
+                  )}
+                  {t.pnlRate !== "" && t.pnlRate != null && (
+                    <span style={{ fontWeight: 700, color: pnlColor(parseFloat(t.pnlRate)) }}>{parseFloat(t.pnlRate) > 0 ? "+" : ""}{t.pnlRate}%</span>
+                  )}
+                </span>
               </div>
               {t.reason && <div style={{ marginTop: 5, fontSize: 12, color: "#666", textAlign: "left" }}>{t.reason.slice(0, 80)}{t.reason.length > 80 ? "..." : ""}</div>}
             </div>
