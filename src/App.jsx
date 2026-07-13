@@ -1152,7 +1152,7 @@ function JournalTab({ techniques }) {
       const newTrades = pending0397.map((t, i) => ({
         ...t, date: t.date || bulk0397Date, id: base + i,
         createdAt: new Date().toLocaleDateString("ko-KR"),
-        chartImg: t.chartImg || null, aiAnalysis: "", reason: "", technique: "", memo: "", chartDesc: t.chartDesc || "",
+        chartImg: t.chartImg || null, aiAnalysis: "", reason: t.reason || "", technique: t.technique || "", memo: t.memo || "", chartDesc: t.chartDesc || "",
       }));
       await sbUpsert("trades", newTrades.map(tradeToRow));
       setTrades(p => [...[...newTrades].reverse(), ...p]);
@@ -1900,6 +1900,8 @@ function JournalTab({ techniques }) {
                           {t.chartImg && <span style={{ fontSize: 10, color: "#4f8ef7" }}>🖼️</span>}
                           <span style={{ fontWeight: 600, minWidth: 80, color: "#ddd" }}>{t.stock}</span>
                           {t.date && <span style={{ fontSize: 11, color: "#555" }}>{t.date}</span>}
+                          {t.technique && <span style={{ background: categoryColor(t.technique), fontSize: 10, padding: "1px 6px", borderRadius: 3, color: "#fff" }}>{t.technique}</span>}
+                          {t.reason && <span style={{ fontSize: 10, color: "#4f8ef7" }}>📝</span>}
                           <span style={{ color: "#777" }}>매수 {t.buyPrice}</span>
                           <span style={{ color: "#777" }}>매도 {t.sellPrice}</span>
                           <span style={{ marginLeft: "auto", fontWeight: 700, color: pnlColor(parseFloat(t.pnlRate)) }}>
@@ -1928,6 +1930,20 @@ function JournalTab({ techniques }) {
                                 파일선택
                                 <input type="file" accept="image/*" style={{ display: "none" }} onChange={async e => { const f = e.target.files[0]; if (f) { await attach0606ToPending(f, i); e.target.value = ""; } }} />
                               </label>
+                            </div>
+                            <div style={{ marginTop: 8 }}>
+                              <div style={label11}>카테고리</div>
+                              <select value={t.technique || ""} onChange={e => setPending0397(p => p.map((r, j) => j === i ? { ...r, technique: e.target.value } : r))}
+                                style={{ width: "100%", background: "#0f1117", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "6px 8px", fontSize: 12 }}>
+                                <option value="">선택 안 함</option>
+                                {TRADE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                              </select>
+                            </div>
+                            <div style={{ marginTop: 8 }}>
+                              <div style={label11}>매매 이유</div>
+                              <textarea value={t.reason || ""} onChange={e => setPending0397(p => p.map((r, j) => j === i ? { ...r, reason: e.target.value } : r))}
+                                placeholder="왜 이 자리에서 매수/매도했는지..."
+                                style={{ width: "100%", minHeight: 60, background: "#0f1117", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: 8, fontSize: 12, resize: "vertical", boxSizing: "border-box" }} />
                             </div>
                             {fill0397Loading && <span style={{ fontSize: 11, color: "#aaa", marginTop: 4, display: "block" }}>⏳ 추출 중...</span>}
                           </div>
