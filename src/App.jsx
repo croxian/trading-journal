@@ -31,9 +31,11 @@ const sbPatch = async (id, data) => {
   if (!r.ok) throw new Error(await r.text());
 };
 // 목록 조회 시 이미지(base64)는 제외 - 대용량 payload 타임아웃 방지 (상세에서 지연 로딩)
-const LIVE_LIST_FIELDS = "id,title,stock,date,text_content,summary,ai_analysis,created_at,deleted_at";
+const LIVE_LIST_FIELDS = "id,title,stock,date,text_content,summary,ai_analysis,category,created_at,deleted_at";
+const LIVE_LIST_FIELDS_NOCAT = "id,title,stock,date,text_content,summary,ai_analysis,created_at,deleted_at";
 const sbGetLiveTrades = async () => {
-  const r = await fetch(`${SB_URL}/rest/v1/live_trades?select=${LIVE_LIST_FIELDS}&deleted_at=is.null&order=id.desc`, { headers: HDR });
+  let r = await fetch(`${SB_URL}/rest/v1/live_trades?select=${LIVE_LIST_FIELDS}&deleted_at=is.null&order=id.desc`, { headers: HDR });
+  if (!r.ok) r = await fetch(`${SB_URL}/rest/v1/live_trades?select=${LIVE_LIST_FIELDS_NOCAT}&deleted_at=is.null&order=id.desc`, { headers: HDR }); // category 컬럼 미생성 시 폴백
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 };
@@ -45,7 +47,20 @@ const sbGetLiveImages = async (id) => {
 };
 const sbPatchLive = async (id, data) => {
   const HDR2 = { ...HDR, Prefer: "return=minimal" };
-  const r = await fetch(`${SB_URL}/rest/v1/live_trades?id=eq.${id}`, { method: "PATCH", headers: HDR2, body: JSON.stringify(data) });
+  let r = await fetch(`${SB_URL}/rest/v1/live_trades?id=eq.${id}`, { method: "PATCH", headers: HDR2, body: JSON.stringify(data) });
+  if (!r.ok && "category" in data) { // category 컬럼 미생성 시 제외하고 재시도
+    const { category, ...rest } = data;
+    r = await fetch(`${SB_URL}/rest/v1/live_trades?id=eq.${id}`, { method: "PATCH", headers: HDR2, body: JSON.stringify(rest) });
+  }
+  if (!r.ok) throw new Error(await r.text());
+};
+// live_trades 저장: category 컬럼 미생성 환경에서도 깨지지 않도록 실패 시 category 제외 후 재시도
+const sbUpsertLive = async (rows) => {
+  let r = await fetch(`${SB_URL}/rest/v1/live_trades`, { method: "POST", headers: HDR, body: JSON.stringify(rows) });
+  if (!r.ok) {
+    const stripped = rows.map(({ category, ...rest }) => rest);
+    r = await fetch(`${SB_URL}/rest/v1/live_trades`, { method: "POST", headers: HDR, body: JSON.stringify(stripped) });
+  }
   if (!r.ok) throw new Error(await r.text());
 };
 const sbDeleteOld = async (before) => {
@@ -88,6 +103,7 @@ const liveTradeToRow = (t) => ({
   images: JSON.stringify(t.images || []),
   ai_analysis: t.aiAnalysis || null,
   summary: t.summary || null,
+  category: t.category || null,
   created_at: t.createdAt,
   deleted_at: t.deletedAt || null,
 });
@@ -97,6 +113,7 @@ const rowToLiveTrade = (r) => ({
   images: (() => { try { return JSON.parse(r.images || "[]"); } catch { return []; } })(),
   aiAnalysis: r.ai_analysis,
   summary: r.summary || null,
+  category: r.category || null,
   createdAt: r.created_at,
   deletedAt: r.deleted_at || null,
 });
@@ -788,12 +805,13 @@ function LectureTab() {
         techniques.length === 0
           ? <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>저장된 기법 없음</div>
           : <div style={{ display: "grid", gap: 10 }}>
-            {techniques.map(t => (
+            {techniques.map((t, i) => (
               <div key={t.id} id={`tech-row-${t.id}`} onClick={() => openDetail(t)}
                 style={{ ...box, cursor: "pointer", scrollMarginTop: isMobile ? 90 : 50 }}
                 onMouseEnter={e => e.currentTarget.style.borderColor = "#4f8ef7"}
                 onMouseLeave={e => e.currentTarget.style.borderColor = "#2a2d3a"}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {i < 51 && <span style={{ background: "#4f8ef7", color: "#fff", fontSize: 11, fontWeight: 700, padding: "2px 7px", borderRadius: 4, flexShrink: 0 }}>{i + 1}강</span>}
                   <span style={{ background: categoryColor(t.category), color: "#fff", fontSize: 11, padding: "2px 7px", borderRadius: 4 }}>{t.category}</span>
                   <span style={{ fontWeight: 600 }}>{t.name}</span>
                   <span style={{ marginLeft: "auto", fontSize: 12, color: "#555" }}>{t.createdAt}</span>
@@ -814,6 +832,7 @@ function LectureTab() {
           {!editMode ? (
             <div style={box}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+                {(() => { const li = techniques.findIndex(x => x.id === selected.id); return li >= 0 && li < 51 ? <span style={{ background: "#4f8ef7", color: "#fff", fontSize: 12, fontWeight: 700, padding: "2px 8px", borderRadius: 4 }}>{li + 1}강</span> : null; })()}
                 <span style={{ background: categoryColor(selected.category), color: "#fff", fontSize: 11, padding: "2px 7px", borderRadius: 4 }}>{selected.category}</span>
                 <span style={{ fontSize: 17, fontWeight: 700 }}>{selected.name}</span>
                 <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
@@ -1362,12 +1381,20 @@ function JournalTab({ techniques }) {
       const pastTrades = pastTradesArr
         .map(t => `[ID:${t.id}] ${t.stock}(${t.date}, ${t.pnlRate}%, 기법:${t.technique || "-"}): ${t.reason?.slice(0, 100)}`).join('\n');
 
-      // 3. 동일 날짜 실전매매 내용/차트 참고
+      // 3. 동일 날짜 실전매매 내용/차트 참고 + '강의' 분류 실전매매를 전역 레퍼런스로 활용
       let liveSection = "(없음)";
+      let lectureRefSection = "(없음)";
       const liveImageBlocks = [];
       try {
         const liveRows = await sbGetLiveTrades();
-        const liveMatches = liveRows.map(rowToLiveTrade).filter(t => t.date === selected.date);
+        const allLive = liveRows.map(rowToLiveTrade);
+        // '강의' 분류 실전매매: 날짜와 무관하게 모든 매매일지 분석에 강의록처럼 참고
+        const lectureLives = allLive.filter(t => t.category === "강의");
+        if (lectureLives.length) {
+          lectureRefSection = lectureLives.map(t => `[${t.title || t.stock || "실전강의"}]${t.date ? ` (${t.date})` : ""}\n${(t.textContent || "").slice(0, 1800)}`).join('\n---\n');
+        }
+        // 동일 날짜 실전매매('강의' 분류는 위에서 별도 처리하므로 제외)
+        const liveMatches = allLive.filter(t => t.date === selected.date && t.category !== "강의");
         if (liveMatches.length) {
           liveSection = liveMatches.map(t => `[${t.stock}]${t.title ? ` ${t.title}` : ""}\n${(t.textContent || "").slice(0, 400)}`).join('\n---\n');
           const sameStock = liveMatches.filter(t => matchStock(t.stock, selected.stock));
@@ -1422,6 +1449,7 @@ function JournalTab({ techniques }) {
         `${imageNote}\n\n` +
         `[적용 기법 강의록 - 우선 참고]\n${techSummary || "(직접 매칭되는 강의록 없음)"}${techNote}\n\n` +
         `[기타 강의록 목록 - 위 기법에 없어도 이번 매매와 유사한 내용이 있는지 추가로 확인]\n${otherTechSummary || "(없음)"}\n\n` +
+        `[실전 강의 레퍼런스 - 강사가 남긴 상세 실전 강의. 위 강의록과 동등하게 근거로 활용할 것]\n${lectureRefSection}\n\n` +
         `[동일 날짜(${selected.date}) 실전매매 기록]\n${liveSection}\n\n` +
         `[과거 유사 매매 - 매매이유 원문]\n${pastTrades || "(없음)"}\n\n` +
         correctionsCtx +
@@ -2524,7 +2552,7 @@ function RealTradeTab() {
   const [lTrades, setLTrades] = useState([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState("list");
-  const [form, setForm] = useState({ title: "", stock: "", date: "", textContent: "", images: [] });
+  const [form, setForm] = useState({ title: "", stock: "", date: "", textContent: "", images: [], category: "" });
   const [feedback, setFeedback] = useState("");
   const [selected, setSelected] = useState(null);
   const [editForm, setEditForm] = useState(null);
@@ -2692,16 +2720,16 @@ function RealTradeTab() {
     if (!form.textContent && !form.stock && !form.title && (!form.images || form.images.length === 0)) { setFeedback("❌ 내용을 입력하세요."); return; }
     const trade = { ...form, id: Date.now(), createdAt: new Date().toLocaleDateString("ko-KR"), aiAnalysis: "" };
     try {
-      await sbUpsert("live_trades", [liveTradeToRow(trade)]);
+      await sbUpsertLive([liveTradeToRow(trade)]);
       setLTrades(p => [trade, ...p]);
-      setForm({ title: "", stock: "", date: "", textContent: "", images: [] });
+      setForm({ title: "", stock: "", date: "", textContent: "", images: [], category: "" });
       setFeedback("✅ 저장됨"); setView("list");
     } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
 
   const handleEditSave = async () => {
     try {
-      await sbUpsert("live_trades", [liveTradeToRow(editForm)]);
+      await sbUpsertLive([liveTradeToRow(editForm)]);
       setLTrades(p => p.map(t => t.id === editForm.id ? editForm : t));
       setSelected(editForm); setEditTrade(false); setFeedback("✅ 수정됨");
     } catch (e) { setFeedback(`❌ ${e.message}`); }
@@ -2766,7 +2794,7 @@ function RealTradeTab() {
             style={{ background: "#2a2d3a", border: "none", borderRadius: 5, color: "#aaa", padding: "4px 8px", fontSize: 12, colorScheme: "dark", cursor: "pointer" }}
             title="날짜로 이동" />
         )}
-        <button onClick={() => { if (view === "add") return; setView("add"); setSelected(null); setFeedback(""); setForm({ title: "", stock: "", date: "", textContent: "", images: [] }); }}
+        <button onClick={() => { if (view === "add") return; setView("add"); setSelected(null); setFeedback(""); setForm({ title: "", stock: "", date: "", textContent: "", images: [], category: "" }); }}
           style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: view === "add" ? "#e74c3c" : "#2a2d3a", color: view === "add" ? "#fff" : "#aaa" }}>
           추가
         </button>
@@ -2790,6 +2818,13 @@ function RealTradeTab() {
           <div style={{ marginBottom: 12 }}>
             <div style={label11}>종목명 (선택, 콤마로 여러 종목 입력 가능)</div>
             <input value={form.stock} onChange={e => setForm(f => ({ ...f, stock: e.target.value }))} placeholder="예: 삼성전자, SK하이닉스" style={iStyle} />
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <div style={label11}>분류</div>
+            <select value={form.category || ""} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} style={{ ...iStyle, colorScheme: "dark" }}>
+              <option value="">일반 실전매매</option>
+              <option value="강의">📚 강의 (모든 매매일지 AI 분석 레퍼런스로 활용)</option>
+            </select>
           </div>
           <div style={{ marginBottom: 12 }}>
             <div style={label11}>카카오톡 내용 (Ctrl+V — [용]으로 시작하는 메시지만 자동 추출)</div>
@@ -2861,6 +2896,7 @@ function RealTradeTab() {
             onMouseEnter={e => e.currentTarget.style.borderColor = "#e74c3c"}
             onMouseLeave={e => e.currentTarget.style.borderColor = "#2a2d3a"}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              {t.category === "강의" && <span style={{ background: "#2e7d32", color: "#fff", fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 3 }}>📚 강의</span>}
               <span style={{ fontWeight: 700 }}>{t.title || t.stock || "제목 없음"}</span>
               {!groupByDate && <span style={{ fontSize: 12, color: "#666" }}>{t.date}</span>}
               {t.images?.length > 0 && <span style={{ fontSize: 11, color: "#555" }}>🖼️ {t.images.length}장</span>}
@@ -3072,6 +3108,13 @@ function RealTradeTab() {
                 <div style={{ marginBottom: 12 }}>
                   <div style={label11}>종목명 (선택, 콤마로 여러 종목 입력 가능)</div>
                   <input value={editForm.stock || ""} onChange={e => setEditForm(f => ({ ...f, stock: e.target.value }))} placeholder="예: 삼성전자, SK하이닉스" style={iStyle} />
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <div style={label11}>분류</div>
+                  <select value={editForm.category || ""} onChange={e => setEditForm(f => ({ ...f, category: e.target.value }))} style={{ ...iStyle, colorScheme: "dark" }}>
+                    <option value="">일반 실전매매</option>
+                    <option value="강의">📚 강의 (모든 매매일지 AI 분석 레퍼런스로 활용)</option>
+                  </select>
                 </div>
                 <div style={{ marginBottom: 12 }}>
                   <div style={label11}>내용 (Ctrl+V로 카카오톡 추가 가능)</div>
