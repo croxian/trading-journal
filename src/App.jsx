@@ -272,6 +272,20 @@ const compressImageForOCR = (file, maxPx = 3000) => new Promise((resolve, reject
   reader.readAsDataURL(file);
 });
 
+// 카카오톡 스크린샷 → 텍스트 추출 ([발신자] 내용 (시간) 형식, 시간순, 이모지 제외)
+const extractKakaoText = async (file) => {
+  const b64 = await compressImageForOCR(file);
+  const raw = await claude(
+    "카카오톡 채팅 스크린샷에서 메시지를 정확히 텍스트로 옮기는 전문가. 지시한 형식의 줄만 출력한다.",
+    [
+      { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
+      { type: "text", text: "이 카카오톡 채팅 스크린샷의 모든 말풍선 메시지를 추출하라.\n- 위에서 아래로(시간 오름차순) 보이는 순서 그대로 유지.\n- 각 메시지를 '[발신자] 내용 (시간)' 형식으로 한 줄씩 출력. 발신자 이름은 프로필/말풍선에 표시된 이름을 사용(대개 '용'). 시간은 '오전 8:44'처럼 보이는 그대로 괄호 안에 넣고, 시간이 표시되지 않은 메시지는 ' (시간)' 부분을 아예 생략.\n- 이모지, 이모티콘, 스티커, 그리고 메시지에 달린 반응 개수(하트/엄지 등 아이콘 뒤에 붙는 숫자)는 모두 제외.\n- 날짜 구분선, 시스템 안내, '사진', '읽음' 표시 등은 제외.\n- 원문 그대로 옮길 것(요약 및 의역 금지, 오타나 말줄임표도 그대로). 한 말풍선이 여러 줄이면 공백으로 이어 한 줄로.\n다른 설명 없이 추출된 줄만 출력." },
+    ],
+    3000, undefined, "claude-fable-5"
+  );
+  return (raw || "").trim();
+};
+
 // 이미지를 JPEG로 압축/리사이즈 (대용량 이미지 → API 요청 크기 초과 방지)
 const compressImage = (file, maxPx = 2048) => new Promise((resolve, reject) => {
   const reader = new FileReader();
@@ -2523,6 +2537,7 @@ function RealTradeTab() {
   const [imgScale, setImgScale] = useState(1);
   const [contentTab, setContentTab] = useState("summary");
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [kakaoLoading, setKakaoLoading] = useState(false);
   const [aiSummary, setAiSummary] = useState("");
   const [groupByDate, setGroupByDate] = useState(false);
   const [scrollToDate, setScrollToDate] = useState(null);
@@ -2647,6 +2662,30 @@ function RealTradeTab() {
     if (files.length === 0) return;
     e.preventDefault();
     files.forEach(f => handleAddImage(f, target));
+  };
+
+  // 카톡 스크린샷 → OCR로 텍스트 추출 후 textContent에 추가 (이미지는 저장하지 않음)
+  const handleKakaoShots = async (files, target) => {
+    if (!files.length) return;
+    setKakaoLoading(true); setFeedback("📷 스크린샷에서 텍스트 추출 중...");
+    try {
+      const texts = [];
+      for (const f of files) { const t = await extractKakaoText(f); if (t) texts.push(t); }
+      const joined = texts.join("\n");
+      if (joined) {
+        if (target === "form") setForm(f => ({ ...f, textContent: [f.textContent, joined].filter(Boolean).join("\n") }));
+        else setEditForm(f => ({ ...f, textContent: [f.textContent || "", joined].filter(Boolean).join("\n") }));
+        setFeedback(`✅ ${files.length}개 스크린샷에서 텍스트 추출됨 (이미지는 저장 안 됨)`);
+      } else setFeedback("❌ 추출된 텍스트 없음");
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+    setKakaoLoading(false);
+  };
+  const handleKakaoPaste = (e, target) => {
+    const files = [];
+    if (e.clipboardData?.items) for (const item of Array.from(e.clipboardData.items)) { if (item.type.startsWith("image/")) { const f = item.getAsFile(); if (f) files.push(f); } }
+    if (files.length === 0) return;
+    e.preventDefault();
+    handleKakaoShots(files, target);
   };
 
   const handleSave = async () => {
@@ -2774,6 +2813,20 @@ function RealTradeTab() {
               placeholder="카카오톡 채팅 내용을 붙여넣으세요 (Ctrl+V)..."
               style={{ ...iStyle, minHeight: 120, resize: "vertical", lineHeight: 1.6, textAlign: "left" }}
             />
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <div style={label11}>📷 카톡 스크린샷 → 텍스트 자동 변환 (Ctrl+V 또는 파일선택 — 이미지는 저장 안 됨)</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <div tabIndex={0} onPaste={e => handleKakaoPaste(e, "form")} onClick={e => e.currentTarget.focus()}
+                style={{ padding: "7px 14px", background: "#2a2d3a", border: "1px dashed #f0b232", borderRadius: 8, cursor: "text", fontSize: 12, color: "#aaa", outline: "none" }}>
+                🖼️ Ctrl+V로 카톡 캡처 붙여넣기
+              </div>
+              <label style={{ padding: "7px 14px", background: "#2a2d3a", border: "1px solid #3a3d4a", borderRadius: 8, cursor: "pointer", fontSize: 12, color: "#aaa" }}>
+                📎 파일선택
+                <input type="file" accept="image/*" multiple style={{ display: "none" }} onChange={e => { handleKakaoShots(Array.from(e.target.files), "form"); e.target.value = ""; }} />
+              </label>
+              {kakaoLoading && <span style={{ fontSize: 12, color: "#f0b232" }}>⏳ 텍스트 변환 중...</span>}
+            </div>
           </div>
           <div style={{ marginBottom: 12 }}>
             <div style={label11}>차트 이미지 (Ctrl+V 또는 파일선택 — 복수 가능)</div>
@@ -3041,6 +3094,20 @@ function RealTradeTab() {
                     }}
                     style={{ ...iStyle, minHeight: 120, resize: "vertical", lineHeight: 1.6, textAlign: "left" }}
                   />
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <div style={label11}>📷 카톡 스크린샷 → 텍스트 자동 변환 (이미지는 저장 안 됨)</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <div tabIndex={0} onPaste={e => handleKakaoPaste(e, "edit")} onClick={e => e.currentTarget.focus()}
+                      style={{ padding: "6px 12px", background: "#2a2d3a", border: "1px dashed #f0b232", borderRadius: 6, cursor: "text", fontSize: 12, color: "#aaa", outline: "none" }}>
+                      🖼️ Ctrl+V로 카톡 캡처 붙여넣기
+                    </div>
+                    <label style={{ padding: "6px 12px", background: "#2a2d3a", border: "1px solid #3a3d4a", borderRadius: 6, cursor: "pointer", fontSize: 12, color: "#aaa" }}>
+                      📎 파일선택
+                      <input type="file" accept="image/*" multiple style={{ display: "none" }} onChange={e => { handleKakaoShots(Array.from(e.target.files), "edit"); e.target.value = ""; }} />
+                    </label>
+                    {kakaoLoading && <span style={{ fontSize: 12, color: "#f0b232" }}>⏳ 변환 중...</span>}
+                  </div>
                 </div>
                 <div style={{ marginBottom: 12 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
