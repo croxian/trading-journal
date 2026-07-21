@@ -231,25 +231,36 @@ const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_KEY || "";
 const claude = async (system, userContent, maxTokens = 1000, temperature, model = "claude-sonnet-4-6") => {
   const headers = { "Content-Type": "application/json", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" };
   if (ANTHROPIC_KEY) headers["x-api-key"] = ANTHROPIC_KEY;
-  const body = JSON.stringify({ model, max_tokens: maxTokens, system, messages: [{ role: "user", content: userContent }], ...(temperature !== undefined ? { temperature } : {}) });
   const RETRYABLE = new Set([500, 529]);
-  for (let attempt = 0; attempt < 3; attempt++) {
-    let res;
-    try {
-      res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body });
-    } catch (e) { throw new Error(`네트워크 오류 (CORS/연결): ${e.message}`); }
-    if (res.ok) {
-      const data = await res.json();
-      return data.content?.map(b => b.text || "").join("") || "";
+  const call = async (mdl) => {
+    const body = JSON.stringify({ model: mdl, max_tokens: maxTokens, system, messages: [{ role: "user", content: userContent }], ...(temperature !== undefined ? { temperature } : {}) });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let res;
+      try {
+        res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body });
+      } catch (e) { throw new Error(`네트워크 오류 (CORS/연결): ${e.message}`); }
+      if (res.ok) {
+        const data = await res.json();
+        return data.content?.map(b => b.text || "").join("") || "";
+      }
+      if (RETRYABLE.has(res.status) && attempt < 2) {
+        const wait = res.status === 529 ? 8000 : 4000;
+        await new Promise(r => setTimeout(r, wait * (attempt + 1)));
+        continue;
+      }
+      let msg = res.status;
+      try { const d = await res.json(); msg = d.error?.message || msg; } catch {}
+      const err = new Error(`API 오류 ${res.status}: ${msg}`);
+      err.status = res.status;
+      throw err;
     }
-    if (RETRYABLE.has(res.status) && attempt < 2) {
-      const wait = res.status === 529 ? 8000 : 4000;
-      await new Promise(r => setTimeout(r, wait * (attempt + 1)));
-      continue;
-    }
-    let msg = res.status;
-    try { const d = await res.json(); msg = d.error?.message || msg; } catch {}
-    throw new Error(`API 오류 ${res.status}: ${msg}`);
+  };
+  try {
+    return await call(model);
+  } catch (e) {
+    // Fable이 과부하(529)로 계속 실패하면 Opus 4.8로 자동 폴백 (분석이 실패로 끝나지 않도록)
+    if (e.status === 529 && /fable/.test(model)) return await call("claude-opus-4-8");
+    throw e;
   }
 };
 const parseJSON = async (text) => {
