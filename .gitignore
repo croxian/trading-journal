@@ -24,3 +24,5 @@ dist-ssr
 *.sw?
 .env
 .pykrx_tmp/
+scripts/*.log
+scripts/market_out.json
