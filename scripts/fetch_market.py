@@ -32,6 +32,15 @@ for t in trades:
 pairs = list(seen.keys())
 print(f"매매일지 고유 종목·날짜 {len(pairs)}건", file=sys.stderr)
 
+# 안전장치: 오늘 날짜 매매는 장 마감(18:30) 후에만 수집(장중엔 일봉 미확정 → 잘못 저장 방지)
+today = dt.date.today().isoformat()
+now = dt.datetime.now()
+if (now.hour * 60 + now.minute) < 18 * 60 + 30:
+    n_today = sum(1 for p in pairs if p[1] == today)
+    if n_today:
+        pairs = [p for p in pairs if p[1] != today]
+        print(f"당일({today}) 매매 {n_today}건은 장 마감 후 수집(현재 미확정) → 이번엔 스킵", file=sys.stderr)
+
 # 2. 이미 수집된 것 제외 (upload & not all) → 신규만
 if MODE == "upload" and not FORCE_ALL:
     existing = set()
