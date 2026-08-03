@@ -77,6 +77,15 @@ const sbUpsert = async (table, rows) => {
   const r = await fetch(`${SB_URL}/rest/v1/${table}`, { method: "POST", headers: HDR, body: JSON.stringify(rows) });
   if (!r.ok) throw new Error(await r.text());
 };
+// KRX 실제 시세(OHLCV·상한가·갭·등락률·지수) - 파이썬 스크립트가 사전수집. 없으면 null
+const sbGetMarketData = async (stock, date) => {
+  try {
+    const r = await fetch(`${SB_URL}/rest/v1/market_data?stock=eq.${encodeURIComponent(stock)}&date=eq.${date}&select=data&limit=1`, { headers: HDR });
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d[0]?.data || null;
+  } catch { return null; }
+};
 const sbDelete = async (table, id) => {
   const r = await fetch(`${SB_URL}/rest/v1/${table}?id=eq.${id}`, { method: "DELETE", headers: HDR });
   if (!r.ok) throw new Error(await r.text());
@@ -1395,6 +1404,16 @@ function JournalTab({ techniques }) {
           `\n위 매매들은 같은 종목을 진입/청산 구간별로 기법을 나누어 기록한 것이다. 이번 분석은 [현재 매매](기법:${selected.technique || "미지정"})의 매수가/매도가/매매이유에 해당하는 구간에만 집중하고, 다른 기법의 매매와 합쳐서 분석하거나 혼동하지 말 것. 각 기법은 별도로 분석할 것.\n`
         : "";
 
+      // 1-2. KRX 실제 시세 (사전수집된 OHLCV·상한가·갭·등락률·지수) - 차트 판독보다 우선하는 확정 사실
+      let marketSection = "";
+      try {
+        const md = await sbGetMarketData(selected.stock, selected.date);
+        if (md?.summary) {
+          const barsTxt = (md.bars || []).map(b => `${b.date} 시${b.o} 고${b.h} 저${b.l} 종${b.c} (등락 ${b.rate ?? "-"}%, 갭 ${b.gap ?? "-"}%, 장중고점 ${b.hrate ?? "-"}%${b.upper ? ", 상한가마감" : ""})`).join('\n');
+          marketSection = `[KRX 실제 시세 - 확정 사실 (차트 이미지 판독보다 반드시 우선)]\n${md.summary}\n[일별 시세]\n${barsTxt}\n※ 위는 한국거래소 실제 데이터다. 전일 상한가 마감 여부, 갭 방향, 등락률, 지수 국면(상승/하락장)은 이 수치를 확정 사실로 사용하고, 차트 이미지에서 읽은 값이 이와 다르면 이 데이터를 따를 것. 손익은 여전히 입력된 매수가·매도가 기준.\n\n`;
+        }
+      } catch {}
+
       // 2. 과거 유사 매매 (매매이유 워딩 참고용, 같은 날 다른 기법 매매는 제외)
       const pastTradesArr = trades.filter(t => t.id !== selected.id && !t.deletedAt && t.reason && !siblingTrades.some(s => s.id === t.id)).slice(0, 15);
       const pastTrades = pastTradesArr
@@ -1465,6 +1484,7 @@ function JournalTab({ techniques }) {
         `[표기 규칙] 매매이유에서 괄호 안 숫자는 만원 단위임. 예: (+50)=+50만원 수익, (1000)=1000만원 매수금액, (-30)=-30만원 손실. "n만원"이라고 쓰지 않고 숫자만 씀.\n\n` +
         `[현재 매매] 종목:${selected.stock} 날짜:${selected.date}${dayLabel} 매수가:${selected.buyPrice || "-"} 매도가:${selected.sellPrice || "-"} 수익률:${selected.pnlRate}% 적용기법:${selected.technique || "미지정"}\n` +
         `매매이유: ${selected.reason}\n${selected.memo ? `메모: ${selected.memo}\n` : ""}${siblingNote}\n` +
+        marketSection +
         `${imageNote}\n\n` +
         `[적용 기법 강의록 - 우선 참고]\n${techSummary || "(직접 매칭되는 강의록 없음)"}${techNote}\n\n` +
         `[기타 강의록 목록 - 위 기법에 없어도 이번 매매와 유사한 내용이 있는지 추가로 확인]\n${otherTechSummary || "(없음)"}\n\n` +
