@@ -216,12 +216,20 @@ const fmtNum = (v) => {
 const filterKakaoText = (raw) => {
   const lines = raw.split('\n');
   const kept = [];
+  let keeping = false; // [용] 메시지 블록을 추출 중인지
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].trim();
     if (/^\[용\]/.test(trimmed)) {
-      // [용] 제거 후 타임스탬프([오전 9:45] 등)도 제거한 실제 내용
+      // [용] 메시지 시작 → 추출 켜기. [용]과 타임스탬프 제거 후 '사진'만 있으면 스킵
+      keeping = true;
       const content = trimmed.replace(/^\[용\]/, '').replace(/^\s*\[[^\]]+\]/, '').trim();
       if (content !== '사진') kept.push(trimmed);
+    } else if (/^\[[^\]]+\]/.test(trimmed)) {
+      // [용]이 아닌 다른 대괄호(다른 발신자/시스템) → 추출 끄기
+      keeping = false;
+    } else if (keeping && trimmed && trimmed !== '사진') {
+      // 대괄호로 시작하지 않는 줄 = [용] 메시지의 연속 행 → 다음 대괄호 전까지 함께 추출
+      kept.push(trimmed);
     }
   }
   return kept.join('\n');
