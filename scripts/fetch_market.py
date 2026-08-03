@@ -92,30 +92,55 @@ def analyze(stock, date):
     if not code: return "NOCODE"  # 상폐/명칭변경 등 영구 실패 → 마커 저장해 매일 재시도 방지
     d = dt.date.fromisoformat(date)
     try:
-        df = fdr.DataReader(code, (d - dt.timedelta(days=14)).isoformat(), date)
+        df = fdr.DataReader(code, (d - dt.timedelta(days=60)).isoformat(), date)  # 연속 상한가 소급 위해 넉넉히
     except Exception:
         return None  # 네트워크/일시 오류 → 저장 안 하고 다음 실행에 재시도
     if df.empty or len(df) < 2: return "NOCODE"  # 코드는 있으나 데이터 없음(상폐 등) → 영구 마커
-    df = df.tail(4)
-    o, h, l, c, dd = df["Open"].tolist(), df["High"].tolist(), df["Low"].tolist(), df["Close"].tolist(), [str(x.date()) for x in df.index]
+    O, H, L, C, D = df["Open"].tolist(), df["High"].tolist(), df["Low"].tolist(), df["Close"].tolist(), [str(x.date()) for x in df.index]
+    V = df["Volume"].tolist() if "Volume" in df.columns else [1]*len(df)
+    N = len(df)
+    rate_at = [None]*N
+    for i in range(1, N):
+        rate_at[i] = round((C[i]-C[i-1])/C[i-1]*100, 2) if C[i-1] else None
+    upper_at = [(rate_at[i] is not None and rate_at[i] >= 29.0) for i in range(N)]
+    halt_at = [(V[i] == 0) for i in range(N)]  # 거래정지(거래량 0)
+
+    # 연속 상한가/상승 회차: 전일(N-2)부터 거꾸로. 4일 제한 없음. 거래정지일은 예외로 건너뜀(스트릭 유지)
+    def streak(cond):
+        s = 0; halts = 0; j = N-2
+        while j >= 1:
+            if halt_at[j]: halts += 1; j -= 1; continue
+            if cond(j): s += 1; j -= 1
+            else: break
+        return s, halts
+    upper_streak, upper_halts = streak(lambda j: upper_at[j])
+    up_streak, _ = streak(lambda j: rate_at[j] is not None and rate_at[j] > 0)
+
+    # bars = 최근 4거래일 (OHLC + 봉형태)
     bars = []
-    for i in range(len(df)):
-        prev = c[i-1] if i > 0 else None
-        rate = round((c[i]-prev)/prev*100, 2) if prev else None
-        gap = round((o[i]-prev)/prev*100, 2) if prev else None
-        hrate = round((h[i]-prev)/prev*100, 2) if prev else None
-        bars.append({"date": dd[i], "o": o[i], "h": h[i], "l": l[i], "c": c[i],
-                     "rate": rate, "gap": gap, "hrate": hrate,
-                     "upper": bool(rate is not None and rate >= 29.0)})
+    for i in range(max(0, N-4), N):
+        prev = C[i-1] if i > 0 else None
+        gap = round((O[i]-prev)/prev*100, 2) if prev else None
+        hrate = round((H[i]-prev)/prev*100, 2) if prev else None
+        rng = H[i] - L[i]
+        pct = lambda x: round(x / rng * 100) if rng > 0 else 0
+        cndl = "양봉" if C[i] > O[i] else ("음봉" if C[i] < O[i] else "도지")
+        bars.append({"date": D[i], "o": O[i], "h": H[i], "l": L[i], "c": C[i],
+                     "rate": rate_at[i], "gap": gap, "hrate": hrate, "upper": upper_at[i],
+                     "cndl": cndl, "body": pct(abs(C[i]-O[i])), "upw": pct(H[i]-max(O[i], C[i])), "loww": pct(min(O[i], C[i])-L[i])})
     idx = index_for(date)
     sgn = lambda v: (f"+{v}" if v >= 0 else f"{v}") if v is not None else "-"
     tb = bars[-1]; pb = bars[-2] if len(bars) >= 2 else None
     parts = []
     if pb:
         if pb["upper"]: parts.append(f"전일({pb['date'][5:]}) 상한가 마감(+{pb['rate']}%)")
-        else: parts.append(f"전일({pb['date'][5:]}) 종가 등락 {sgn(pb['rate'])}%" + (f", 장중 고점 {sgn(pb['hrate'])}%" if pb['hrate'] and pb['hrate'] >= 20 else ""))
+        else: parts.append(f"전일({pb['date'][5:]}) {pb['cndl']} 종가 등락 {sgn(pb['rate'])}%" + (f", 장중 고점 {sgn(pb['hrate'])}%" if pb['hrate'] and pb['hrate'] >= 20 else ""))
+    if upper_streak > 0:
+        parts.append(f"전일까지 {upper_streak}일 연속 상한가" + (f"(중간 거래정지 {upper_halts}일 제외)" if upper_halts else ""))
+    elif up_streak > 0:
+        parts.append(f"전일까지 {up_streak}일 연속 상승")
     gapstr = f"갭{'상승' if (tb['gap'] or 0) > 1 else '하락' if (tb['gap'] or 0) < -1 else '보합'}({tb['gap']}%)" if tb['gap'] is not None else ""
-    parts.append(f"당일({tb['date'][5:]}) {gapstr} 출발, 종가 등락 {sgn(tb['rate'])}%, 장중 고점 {sgn(tb['hrate'])}%" + ("[상한가마감]" if tb['upper'] else ""))
+    parts.append(f"당일({tb['date'][5:]}) {gapstr} 출발 {tb['cndl']}(몸통{tb['body']}%·윗꼬리{tb['upw']}%·아랫꼬리{tb['loww']}%), 종가 등락 {sgn(tb['rate'])}%, 장중 고점 {sgn(tb['hrate'])}%" + ("[상한가마감]" if tb['upper'] else ""))
     if idx:
         mk = []
         if "kospi" in idx: mk.append(f"코스피 {idx['kospi']}%")

@@ -1409,7 +1409,7 @@ function JournalTab({ techniques }) {
       try {
         const md = await sbGetMarketData(selected.stock, selected.date);
         if (md?.summary) {
-          const barsTxt = (md.bars || []).map(b => `${b.date} 시${b.o} 고${b.h} 저${b.l} 종${b.c} (등락 ${b.rate ?? "-"}%, 갭 ${b.gap ?? "-"}%, 장중고점 ${b.hrate ?? "-"}%${b.upper ? ", 상한가마감" : ""})`).join('\n');
+          const barsTxt = (md.bars || []).map(b => `${b.date} 시${b.o} 고${b.h} 저${b.l} 종${b.c}${b.cndl ? ` ${b.cndl}(몸통${b.body}%·윗꼬리${b.upw}%·아랫꼬리${b.loww}%)` : ""} (등락 ${b.rate ?? "-"}%, 갭 ${b.gap ?? "-"}%, 장중고점 ${b.hrate ?? "-"}%${b.upper ? ", 상한가마감" : ""})`).join('\n');
           marketSection = `[KRX 정규장 실제 시세 - 확정 사실]\n${md.summary}\n[일별 시세]\n${barsTxt}\n` +
             `※ 위는 한국거래소 '정규장(09:00~15:30)' 실제 데이터다. 전일 상한가 마감 여부, 지수 국면(상승/하락장), 정규장 기준 종가 등락률은 이 수치를 확정 사실로 쓰고, 차트에서 읽은 값이 다르면 이 데이터를 따를 것.\n` +
             `※ [중요-NXT 예외] 정규장은 09:00 시작이다. 차트 시간축에 09:00 이전(프리마켓, 보통 08:00~) 또는 15:30 이후(애프터마켓, ~20:00) 캔들이 보이면 그건 NXT(넥스트레이드) 연장거래이며 위 KRX 데이터에는 포함되지 않는다. 이 경우 시가·갭 방향·장중 고가/저가·연장시간대 흐름은 KRX 수치가 아니라 차트를 우선해서 해석하고, KRX의 시가/고저를 그 구간에 그대로 적용해 단정하지 말 것. (차트에 09:00 이전/15:30 이후 구간이 있는지 먼저 확인)\n` +
