@@ -793,6 +793,9 @@ function LectureTab({ pendingLecture, onConsumed }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // add/edit 폼 이탈 시 히스토리 마커 정리
+  const histRest = (v, id) => window.history.replaceState({ ...(window.history.state || {}), techView: v, techId: id }, "");
+
   const extractPdf = async (file) => {
     const b64 = await toBase64(file);
     return claude("PDF에서 매매 기법 관련 텍스트만 추출. 광고/인사말/URL 제거. plain text만 출력.", [
@@ -810,7 +813,7 @@ function LectureTab({ pendingLecture, onConsumed }) {
       parsed.id = Date.now(); parsed.createdAt = new Date().toLocaleDateString("ko-KR"); parsed.rawInput = input;
       await sbUpsert("techniques", [techToRow(parsed)]);
       setTechniques(p => [...p, parsed]);
-      setInput(""); setFeedback("✅ 저장됨"); setView("list");
+      setInput(""); setFeedback("✅ 저장됨"); histRest("list"); setView("list");
     } catch (e) { setFeedback(`❌ ${e.message}`); }
     setSaving(false);
   };
@@ -825,7 +828,7 @@ function LectureTab({ pendingLecture, onConsumed }) {
       const updated = JSON.parse(editJson);
       await sbUpsert("techniques", [techToRow(updated)]);
       setTechniques(p => p.map(t => t.id === updated.id ? updated : t));
-      setSelected(updated); setEditMode(false); setFeedback("✅ 저장됨");
+      setSelected(updated); histRest("detail", updated.id); setEditMode(false); setFeedback("✅ 저장됨");
     } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
 
@@ -834,7 +837,7 @@ function LectureTab({ pendingLecture, onConsumed }) {
     try {
       await sbUpsert("techniques", [techToRow(updated)]);
       setTechniques(p => p.map(t => t.id === updated.id ? updated : t));
-      setSelected(updated); setEditMode(false); setFeedback("✅ 저장됨");
+      setSelected(updated); histRest("detail", updated.id); setEditMode(false); setFeedback("✅ 저장됨");
     } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
 
@@ -857,7 +860,7 @@ function LectureTab({ pendingLecture, onConsumed }) {
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center" }}>
-        {tabBtn(view === "list" && !selected, () => { setView("list"); setSelected(null); setFeedback(""); }, `기법 목록 (${techniques.length})`)}
+        {tabBtn(view === "list" && !selected, () => { if (view !== "list" || selected) histRest("list"); setView("list"); setSelected(null); setFeedback(""); }, `기법 목록 (${techniques.length})`)}
         {tabBtn(view === "add", () => { if (view !== "add") window.history.pushState({ ...(window.history.state || {}), techView: "add", techId: undefined }, ""); setView("add"); setSelected(null); setFeedback(""); }, "기법 추가")}
         <button onClick={load} style={{ marginLeft: "auto", padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>🔄</button>
       </div>
@@ -988,7 +991,7 @@ function LectureTab({ pendingLecture, onConsumed }) {
                     style={{ width: "100%", minHeight: 180, background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 8, color: "#e0e0e0", padding: 12, fontSize: 13, resize: "vertical", boxSizing: "border-box", textAlign: "left" }} />
                   <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
                     <button onClick={handleRawSave} style={{ padding: "6px 16px", background: "#4f8ef7", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>저장</button>
-                    <button onClick={() => setEditMode(false)} style={{ padding: "6px 16px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>취소</button>
+                    <button onClick={() => { if (selected) histRest("detail", selected.id); setEditMode(false); }} style={{ padding: "6px 16px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>취소</button>
                     {feedback && <span style={{ fontSize: 13, color: feedback.startsWith("✅") ? "#4caf50" : "#e74c3c" }}>{feedback}</span>}
                   </div>
                 </div>
@@ -998,7 +1001,7 @@ function LectureTab({ pendingLecture, onConsumed }) {
                     style={{ width: "100%", minHeight: 360, background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 8, color: "#e0e0e0", padding: 12, fontSize: 12, fontFamily: "monospace", resize: "vertical", boxSizing: "border-box", textAlign: "left" }} />
                   <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
                     <button onClick={handleEditSave} style={{ padding: "6px 16px", background: "#4f8ef7", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>저장</button>
-                    <button onClick={() => setEditMode(false)} style={{ padding: "6px 16px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>취소</button>
+                    <button onClick={() => { if (selected) histRest("detail", selected.id); setEditMode(false); }} style={{ padding: "6px 16px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>취소</button>
                     {feedback && <span style={{ fontSize: 13, color: feedback.startsWith("✅") ? "#4caf50" : "#e74c3c" }}>{feedback}</span>}
                   </div>
                 </div>
@@ -1150,6 +1153,9 @@ function JournalTab({ techniques, onOpenLecture }) {
 
   useEffect(() => { tradesRef.current = trades; }, [trades]);
 
+  // add/edit 폼에서 저장·이동으로 나갈 때 현재 히스토리 항목을 목록/상세로 교체(add/edit 마커가 남아 뒤로가기 꼬이는 것 방지)
+  const histRest = (v, id) => window.history.replaceState({ ...(window.history.state || {}), journalView: v, journalId: id }, "");
+
   const recentStocks = [...new Set(trades.map(t => t.stock).filter(Boolean))].slice(0, 10);
 
   const sortTrades = (arr) => {
@@ -1277,7 +1283,7 @@ function JournalTab({ techniques, onOpenLecture }) {
       await sbUpsert("trades", [tradeToRow(trade)]);
       setTrades(p => [trade, ...p]);
       setForm({ stock: "", date: "", buyPrice: "", sellPrice: "", amount: "", pnl: "", pnlRate: "", reason: "", technique: "", memo: "", chartDesc: "" });
-      setChartImg(null); setAiAnalysis(""); setFeedback("✅ 저장됨"); setView("list");
+      setChartImg(null); setAiAnalysis(""); setFeedback("✅ 저장됨"); histRest("list"); setView("list");
     } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
 
@@ -1670,7 +1676,7 @@ function JournalTab({ techniques, onOpenLecture }) {
       setTrades(p => [...[...newTrades].reverse(), ...p]);
       setPendingPpt([]);
       setFeedback(`✅ ${newTrades.length}건 저장됨`);
-      setListTab("trades"); setView("list");
+      histRest("list"); setListTab("trades"); setView("list");
     } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
 
@@ -1748,7 +1754,7 @@ function JournalTab({ techniques, onOpenLecture }) {
     try {
       await sbUpsert("trades", [tradeToRow(editForm)]);
       setTrades(p => p.map(t => t.id === editForm.id ? editForm : t));
-      setSelected(editForm); setEditTrade(false); setFeedback("✅ 수정됨");
+      setSelected(editForm); histRest("detail", editForm.id); setEditTrade(false); setFeedback("✅ 수정됨");
     } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
 
@@ -1856,6 +1862,7 @@ function JournalTab({ techniques, onOpenLecture }) {
           ["trash", `🗑️ 휴지통${trashTrades.length > 0 ? ` (${trashTrades.length})` : ""}`],
         ].map(([tab, label]) => (
           <button key={tab} onClick={() => {
+            if (view !== "list") histRest("list");
             setView("list"); setListTab(tab); setSelected(null); setFeedback(""); setAiAnalysis("");
             setSelectMode(false); setSelectedIds(new Set());
             setTrashSelectMode(false); setTrashSelectedIds(new Set());
@@ -2643,7 +2650,7 @@ function JournalTab({ techniques, onOpenLecture }) {
               )}
               <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                 <button onClick={handleEditSave} style={{ padding: "8px 20px", background: "#4f8ef7", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>저장</button>
-                <button onClick={() => { setEditTrade(false); setFeedback(""); }}
+                <button onClick={() => { if (selected) histRest("detail", selected.id); setEditTrade(false); setFeedback(""); }}
                   style={{ padding: "8px 14px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>취소</button>
                 {feedback && <span style={{ fontSize: 13, color: feedback.startsWith("✅") ? "#4caf50" : "#e74c3c" }}>{feedback}</span>}
               </div>
@@ -2868,6 +2875,9 @@ function RealTradeTab() {
     handleKakaoShots(files, target);
   };
 
+  // add/edit 폼 이탈 시 히스토리 마커 정리
+  const histRest = (v, id) => window.history.replaceState({ ...(window.history.state || {}), liveView: v, liveId: id }, "");
+
   const handleSave = async () => {
     if (!form.textContent && !form.stock && !form.title && (!form.images || form.images.length === 0)) { setFeedback("❌ 내용을 입력하세요."); return; }
     const trade = { ...form, id: Date.now(), createdAt: new Date().toLocaleDateString("ko-KR"), aiAnalysis: "" };
@@ -2875,7 +2885,7 @@ function RealTradeTab() {
       await sbUpsertLive([liveTradeToRow(trade)]);
       setLTrades(p => [trade, ...p]);
       setForm({ title: "", stock: "", date: "", textContent: "", images: [], category: "" });
-      setFeedback("✅ 저장됨"); setView("list");
+      setFeedback("✅ 저장됨"); histRest("list"); setView("list");
     } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
 
@@ -2883,7 +2893,7 @@ function RealTradeTab() {
     try {
       await sbUpsertLive([liveTradeToRow(editForm)]);
       setLTrades(p => p.map(t => t.id === editForm.id ? editForm : t));
-      setSelected(editForm); setEditTrade(false); setFeedback("✅ 수정됨");
+      setSelected(editForm); histRest("detail", editForm.id); setEditTrade(false); setFeedback("✅ 수정됨");
     } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
 
@@ -3351,7 +3361,7 @@ function RealTradeTab() {
                 </div>
                 <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                   <button onClick={handleEditSave} style={{ padding: "8px 20px", background: "#e74c3c", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>저장</button>
-                  <button onClick={() => { setEditTrade(false); setFeedback(""); }} style={{ padding: "8px 14px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>취소</button>
+                  <button onClick={() => { if (selected) histRest("detail", selected.id); setEditTrade(false); setFeedback(""); }} style={{ padding: "8px 14px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 6, cursor: "pointer" }}>취소</button>
                   {feedback && <span style={{ fontSize: 13, color: feedback.startsWith("✅") ? "#4caf50" : "#e74c3c" }}>{feedback}</span>}
                 </div>
               </div>
