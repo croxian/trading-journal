@@ -1608,6 +1608,12 @@ function JournalTab({ techniques, onOpenLecture }) {
       }
       setSimilarTrades(sims);
       analysisCacheRef.current[selected.id] = { text: analysisText, similarIds: sims.map(t => t.id), recLectureId: lecMatch ? parseInt(lecMatch[1]) : null };
+      // 분석 결과 자동 저장 (비용 든 결과 유실 방지) — 다른 매매로 이동해 있어도 원래 대상에만 반영
+      try {
+        await sbPatch(selected.id, { ai_analysis: analysisText });
+        setTrades(p => p.map(t => t.id === selected.id ? { ...t, aiAnalysis: analysisText } : t));
+        setSelected(s => (s && s.id === selected.id ? { ...s, aiAnalysis: analysisText } : s));
+      } catch {}
     } catch (e) { setFeedback(`❌ ${e.message}`); }
     setDetailAiLoading(false);
   };
