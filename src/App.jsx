@@ -244,6 +244,45 @@ const filterKakaoText = (raw) => {
   return kept.join('\n');
 };
 
+// 검색 매처: 기본은 띄어쓰기 포함 문자열 그대로. " and "/" or "를 쓰면 AND/OR 연산(각 항은 부분일치)
+const makeMatcher = (query) => {
+  const q = (query || "").trim();
+  if (!q) return null;
+  const low = q.toLowerCase();
+  let mode = "literal", terms = [q];
+  if (/\s+or\s+/i.test(q)) { mode = "or"; terms = q.split(/\s+or\s+/i); }
+  else if (/\s+and\s+/i.test(q)) { mode = "and"; terms = q.split(/\s+and\s+/i); }
+  const lt = terms.map(t => t.trim().toLowerCase()).filter(Boolean);
+  if (!lt.length) return null;
+  return (text) => {
+    const t = (text || "").toLowerCase();
+    if (mode === "or") return lt.some(x => t.includes(x));
+    if (mode === "and") return lt.every(x => t.includes(x));
+    return t.includes(low);
+  };
+};
+// 검색 하이라이트용: 매칭 항(term) 목록 반환
+const searchTerms = (query) => {
+  const q = (query || "").trim();
+  if (!q) return [];
+  if (/\s+or\s+/i.test(q)) return q.split(/\s+or\s+/i).map(t => t.trim()).filter(Boolean);
+  if (/\s+and\s+/i.test(q)) return q.split(/\s+and\s+/i).map(t => t.trim()).filter(Boolean);
+  return [q];
+};
+// 텍스트에서 term들을 하이라이트한 React 조각 반환
+const highlightText = (text, terms) => {
+  const clean = (terms || []).map(t => (t || "").trim()).filter(Boolean);
+  if (!text || !clean.length) return text;
+  const esc = clean.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const re = new RegExp(`(${esc.join("|")})`, "gi");
+  const lowTerms = clean.map(t => t.toLowerCase());
+  return String(text).split(re).map((p, i) =>
+    lowTerms.includes(p.toLowerCase())
+      ? <mark key={i} style={{ background: "#f0b232", color: "#000", borderRadius: 2, padding: "0 1px" }}>{p}</mark>
+      : <span key={i}>{p}</span>
+  );
+};
+
 const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_KEY || "";
 const claude = async (system, userContent, maxTokens = 1000, temperature, model = "claude-sonnet-4-6") => {
   const headers = { "Content-Type": "application/json", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" };
@@ -695,6 +734,7 @@ function LectureTab() {
   const [feedback, setFeedback] = useState("");
   const [view, setView] = useState("list");
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [search, setSearch] = useState("");
   const scrollTargetRef = useScrollRestore(view);
   const isMobile = useIsMobile();
   const techsRef = useRef([]);
@@ -829,29 +869,45 @@ function LectureTab() {
         </div>
       )}
 
-      {!loading && view === "list" && !selected && (
-        techniques.length === 0
-          ? <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>저장된 기법 없음</div>
-          : <div style={{ display: "grid", gap: 10 }}>
-            {techniques.map((t, i) => (
-              <div key={t.id} id={`tech-row-${t.id}`} onClick={() => openDetail(t)}
-                style={{ ...box, cursor: "pointer", scrollMarginTop: isMobile ? 90 : 50 }}
-                onMouseEnter={e => e.currentTarget.style.borderColor = "#4f8ef7"}
-                onMouseLeave={e => e.currentTarget.style.borderColor = "#2a2d3a"}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  {i < 51 && <span style={{ background: "#4f8ef7", color: "#fff", fontSize: 11, fontWeight: 700, padding: "2px 7px", borderRadius: 4, flexShrink: 0 }}>{i + 1}강</span>}
-                  <span style={{ background: categoryColor(t.category), color: "#fff", fontSize: 11, padding: "2px 7px", borderRadius: 4 }}>{t.category}</span>
-                  <span style={{ fontWeight: 600 }}>{t.name}</span>
-                  <span style={{ marginLeft: "auto", fontSize: 12, color: "#555" }}>{t.createdAt}</span>
-                </div>
-                <div style={{ marginTop: 6, fontSize: 12, color: "#777", textAlign: "left" }}>{t.entry?.condition?.slice(0, 80)}...</div>
-                <div style={{ marginTop: 6, display: "flex", gap: 5, flexWrap: "wrap" }}>
-                  {t.tags?.map(tag => <span key={tag} style={{ background: "#2a2d3a", fontSize: 11, padding: "1px 6px", borderRadius: 4, color: "#aaa" }}>#{tag}</span>)}
-                </div>
-              </div>
-            ))}
+      {!loading && view === "list" && !selected && (() => {
+        const matcher = makeMatcher(search);
+        const items = techniques.map((t, i) => ({ t, i })).filter(({ t }) => !matcher || matcher(`${t.name || ""} ${t.rawInput || ""} ${(t.tags || []).join(" ")}`));
+        const searchBox = (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 강의록 원문 검색 (띄어쓰기 그대로, and/or 연산)"
+              style={{ flex: 1, background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "7px 10px", fontSize: 13, boxSizing: "border-box" }} />
+            {search && <button onClick={() => setSearch("")} style={{ padding: "6px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>✕</button>}
+            {matcher && <span style={{ fontSize: 12, color: "#888", whiteSpace: "nowrap" }}>{items.length}건</span>}
           </div>
-      )}
+        );
+        if (techniques.length === 0) return <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>저장된 기법 없음</div>;
+        return (
+          <div>
+            {searchBox}
+            {items.length === 0 ? <div style={{ color: "#555", marginTop: 30, textAlign: "center" }}>검색 결과 없음</div> : (
+              <div style={{ display: "grid", gap: 10 }}>
+                {items.map(({ t, i }) => (
+                  <div key={t.id} id={`tech-row-${t.id}`} onClick={() => openDetail(t)}
+                    style={{ ...box, cursor: "pointer", scrollMarginTop: isMobile ? 90 : 50 }}
+                    onMouseEnter={e => e.currentTarget.style.borderColor = "#4f8ef7"}
+                    onMouseLeave={e => e.currentTarget.style.borderColor = "#2a2d3a"}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      {i < 51 && <span style={{ background: "#4f8ef7", color: "#fff", fontSize: 11, fontWeight: 700, padding: "2px 7px", borderRadius: 4, flexShrink: 0 }}>{i + 1}강</span>}
+                      <span style={{ background: categoryColor(t.category), color: "#fff", fontSize: 11, padding: "2px 7px", borderRadius: 4 }}>{t.category}</span>
+                      <span style={{ fontWeight: 600 }}>{t.name}</span>
+                      <span style={{ marginLeft: "auto", fontSize: 12, color: "#555" }}>{t.createdAt}</span>
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: 12, color: "#777", textAlign: "left" }}>{t.entry?.condition?.slice(0, 80)}...</div>
+                    <div style={{ marginTop: 6, display: "flex", gap: 5, flexWrap: "wrap" }}>
+                      {t.tags?.map(tag => <span key={tag} style={{ background: "#2a2d3a", fontSize: 11, padding: "1px 6px", borderRadius: 4, color: "#aaa" }}>#{tag}</span>)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {!loading && view === "detail" && selected && (
         <div>
@@ -986,6 +1042,7 @@ function JournalTab({ techniques }) {
   const [sortBy, setSortBy] = useState("date_desc");
   const [techFilter, setTechFilter] = useState(new Set());
   const [showTechDrop, setShowTechDrop] = useState(false);
+  const [search, setSearch] = useState("");
   const pasteZoneRef = useRef(null);
   const tradesRef = useRef([]);
   const selectedRef = useRef(null);
@@ -2195,9 +2252,10 @@ function JournalTab({ techniques }) {
       )}
 
       {!loading && view === "list" && !selected && listTab !== "trash" && (() => {
-        const filtered = applyTechFilter(trades);
+        const matcher = makeMatcher(search);
+        const searched = matcher ? trades.filter(t => matcher(`${t.stock || ""} ${t.reason || ""} ${t.memo || ""}`)) : trades;
+        const filtered = applyTechFilter(searched);
         const sorted = sortTrades(filtered);
-        if (sorted.length === 0) return <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>매매 기록 없음</div>;
 
         const toggleSelect = (id) => setSelectedIds(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
         const allFiltered = sorted;
@@ -2250,12 +2308,23 @@ function JournalTab({ techniques }) {
           </div>
         ) : null;
 
-        if (!groupByDate) return <div style={{ display: "grid", gap: 8 }}>{SelectBar}{sorted.map(TradeRow)}</div>;
+        const searchBox = (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 종목·매매이유 검색 (띄어쓰기 그대로, and/or 연산)"
+              style={{ flex: 1, background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "7px 10px", fontSize: 13, boxSizing: "border-box" }} />
+            {search && <button onClick={() => setSearch("")} style={{ padding: "6px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>✕</button>}
+            {matcher && <span style={{ fontSize: 12, color: "#888", whiteSpace: "nowrap" }}>{sorted.length}건</span>}
+          </div>
+        );
+        if (sorted.length === 0) return <div>{searchBox}<div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>{matcher ? "검색 결과 없음" : "매매 기록 없음"}</div></div>;
+
+        if (!groupByDate) return <div>{searchBox}<div style={{ display: "grid", gap: 8 }}>{SelectBar}{sorted.map(TradeRow)}</div></div>;
         const grouped = sorted.reduce((acc, t) => { const d = t.date || "날짜없음"; (acc[d] = acc[d] || []).push(t); return acc; }, {});
         const sortedDates = [...new Set(sorted.map(t => t.date || "날짜없음"))];
         const dayPnl = (ts) => ts.reduce((s, t) => s + (parseFloat(t.pnl) || 0), 0);
         return (
           <div style={{ display: "grid", gap: 4 }}>
+            {searchBox}
             {SelectBar}
             {sortedDates.map(date => (
               <div key={date} id={`date-sec-${date}`} style={{ scrollMarginTop: isMobile ? 90 : 50 }}>
@@ -2595,6 +2664,7 @@ function RealTradeTab() {
   const [lTrades, setLTrades] = useState([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState("list");
+  const [search, setSearch] = useState("");
   const [form, setForm] = useState({ title: "", stock: "", date: "", textContent: "", images: [], category: "" });
   const [feedback, setFeedback] = useState("");
   const [selected, setSelected] = useState(null);
@@ -2680,7 +2750,7 @@ function RealTradeTab() {
       window.history.pushState({ ...(window.history.state || {}), liveView: "detail", liveId: trade.id }, "");
     setSelected(trade); setView("detail"); setFeedback(""); setEditTrade(false);
     setAiAnalysis(""); setSimilarTrades(trade.aiAnalysis ? calcSimilar(trade, lTrades) : []);
-    setImgIdx(0); setImgScale(1); setContentTab("summary"); setAiSummary("");
+    setImgIdx(0); setImgScale(1); setContentTab(search.trim() ? "full" : "summary"); setAiSummary("");
     // 이미지는 목록에서 제외되므로 상세 진입 시 지연 로딩 (이미 있으면 스킵)
     if (!trade.images || trade.images.length === 0) {
       const imgs = await sbGetLiveImages(trade.id);
@@ -2932,7 +3002,33 @@ function RealTradeTab() {
       )}
 
       {!loading && view === "list" && !selected && (() => {
+        const matcher = makeMatcher(search);
+        const list = matcher ? lTrades.filter(t => matcher(`${t.textContent || ""} ${t.title || ""} ${t.stock || ""}`)) : lTrades;
+        const terms = searchTerms(search);
+        const searchBox = (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 카톡 원문 검색 (띄어쓰기 그대로, and/or 연산)"
+              style={{ flex: 1, background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "7px 10px", fontSize: 13, boxSizing: "border-box" }} />
+            {search && <button onClick={() => setSearch("")} style={{ padding: "6px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>✕</button>}
+            {matcher && <span style={{ fontSize: 12, color: "#888", whiteSpace: "nowrap" }}>{list.length}건</span>}
+          </div>
+        );
         if (lTrades.length === 0) return <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>실전매매 기록 없음</div>;
+        const matchedSnippet = (t) => {
+          // 검색 시: 매칭된 첫 위치 주변 원문 발췌 + 하이라이트
+          const txt = t.textContent || "";
+          if (matcher && terms.length && txt) {
+            const low = txt.toLowerCase();
+            let pos = -1;
+            for (const term of terms) { const p = low.indexOf(term.toLowerCase()); if (p >= 0 && (pos < 0 || p < pos)) pos = p; }
+            if (pos >= 0) {
+              const start = Math.max(0, pos - 20);
+              const snip = (start > 0 ? "…" : "") + txt.slice(start, pos + 90) + (pos + 90 < txt.length ? "…" : "");
+              return highlightText(snip, terms);
+            }
+          }
+          return (t.summary || txt).slice(0, 70) + ((t.summary || txt).length > 70 ? "..." : "");
+        };
         const TradeRow = (t) => (
           <div key={t.id} id={`live-row-${t.id}`} onClick={() => openDetail(t)}
             style={{ ...box, cursor: "pointer", scrollMarginTop: isMobile ? 90 : 50 }}
@@ -2954,17 +3050,19 @@ function RealTradeTab() {
             )}
             {(t.summary || t.textContent) && (
               <div style={{ marginTop: 5, fontSize: 12, color: "#666", textAlign: "left" }}>
-                {(t.summary || t.textContent).slice(0, 70)}{(t.summary || t.textContent).length > 70 ? "..." : ""}
+                {matchedSnippet(t)}
               </div>
             )}
           </div>
         );
 
-        if (!groupByDate) return <div style={{ display: "grid", gap: 8 }}>{lTrades.map(TradeRow)}</div>;
-        const grouped = lTrades.reduce((acc, t) => { const d = t.date || "날짜없음"; (acc[d] = acc[d] || []).push(t); return acc; }, {});
-        const sortedDates = [...new Set(lTrades.map(t => t.date || "날짜없음"))];
+        if (list.length === 0) return <div>{searchBox}<div style={{ color: "#555", marginTop: 30, textAlign: "center" }}>검색 결과 없음</div></div>;
+        if (!groupByDate) return <div>{searchBox}<div style={{ display: "grid", gap: 8 }}>{list.map(TradeRow)}</div></div>;
+        const grouped = list.reduce((acc, t) => { const d = t.date || "날짜없음"; (acc[d] = acc[d] || []).push(t); return acc; }, {});
+        const sortedDates = [...new Set(list.map(t => t.date || "날짜없음"))];
         return (
           <div style={{ display: "grid", gap: 4 }}>
+            {searchBox}
             {sortedDates.map(date => (
               <div key={date} id={`date-sec-${date}`} style={{ scrollMarginTop: isMobile ? 90 : 50 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 2px", borderBottom: "1px solid #2a2d3a", marginBottom: 6 }}>
@@ -3088,7 +3186,7 @@ function RealTradeTab() {
 
                   {contentTab === "full" && (
                     <div style={{ ...val14, maxHeight: "224px", overflowY: "auto" }}>
-                      {selected.textContent || <span style={{ color: "#555" }}>내용 없음</span>}
+                      {selected.textContent ? (search.trim() ? highlightText(selected.textContent, searchTerms(search)) : selected.textContent) : <span style={{ color: "#555" }}>내용 없음</span>}
                     </div>
                   )}
                 </div>
