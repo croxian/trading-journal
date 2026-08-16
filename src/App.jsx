@@ -775,11 +775,16 @@ function LectureTab({ pendingLecture, onConsumed }) {
     window.history.replaceState({ ...(window.history.state || {}), techView: "list" }, "");
     const handlePop = (e) => {
       const s = e.state || {};
-      if (s.techView === "detail" && s.techId) {
+      if ((s.techView === "detail" || s.techView === "edit") && s.techId) {
         const t = techsRef.current.find(x => x.id === s.techId);
-        if (t) { setSelected(t); setView("detail"); setFeedback(""); }
-      } else if (selectedRef.current) {
-        scrollTargetRef.current = `tech-row-${selectedRef.current.id}`;
+        if (t) {
+          setSelected(t); setView("detail"); setFeedback("");
+          if (s.techView === "edit") { setEditJson(JSON.stringify(t, null, 2)); setEditRaw(t.rawInput || ""); setEditSubMode("raw"); setEditMode(true); } else setEditMode(false);
+        }
+      } else if (s.techView === "add") {
+        setView("add"); setSelected(null); setEditMode(false); setFeedback("");
+      } else {
+        if (selectedRef.current) scrollTargetRef.current = `tech-row-${selectedRef.current.id}`;
         setView("list"); setSelected(null); setEditMode(false); setFeedback(""); setDeleteConfirm(false);
       }
     };
@@ -853,7 +858,7 @@ function LectureTab({ pendingLecture, onConsumed }) {
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center" }}>
         {tabBtn(view === "list" && !selected, () => { setView("list"); setSelected(null); setFeedback(""); }, `기법 목록 (${techniques.length})`)}
-        {tabBtn(view === "add", () => { setView("add"); setSelected(null); setFeedback(""); }, "기법 추가")}
+        {tabBtn(view === "add", () => { if (view !== "add") window.history.pushState({ ...(window.history.state || {}), techView: "add", techId: undefined }, ""); setView("add"); setSelected(null); setFeedback(""); }, "기법 추가")}
         <button onClick={load} style={{ marginLeft: "auto", padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>🔄</button>
       </div>
 
@@ -929,7 +934,7 @@ function LectureTab({ pendingLecture, onConsumed }) {
                 <span style={{ background: categoryColor(selected.category), color: "#fff", fontSize: 11, padding: "2px 7px", borderRadius: 4 }}>{selected.category}</span>
                 <span style={{ fontSize: 17, fontWeight: 700 }}>{selected.name}</span>
                 <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
-                  <button onClick={() => { setEditJson(JSON.stringify(selected, null, 2)); setEditRaw(selected.rawInput || ""); setEditSubMode("raw"); setEditMode(true); }}
+                  <button onClick={() => { window.history.pushState({ ...(window.history.state || {}), techView: "edit", techId: selected.id }, ""); setEditJson(JSON.stringify(selected, null, 2)); setEditRaw(selected.rawInput || ""); setEditSubMode("raw"); setEditMode(true); }}
                     style={{ padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>수정</button>
                   {deleteConfirm ? (
                     <>
@@ -1123,14 +1128,17 @@ function JournalTab({ techniques, onOpenLecture }) {
     window.history.replaceState({ ...(window.history.state || {}), journalView: "list" }, "");
     const handlePop = (e) => {
       const s = e.state || {};
-      if (s.journalView === "detail" && s.journalId) {
+      if ((s.journalView === "detail" || s.journalView === "edit") && s.journalId) {
         const t = tradesRef.current.find(x => x.id === s.journalId);
         if (t) {
-          setSelected(t); setView("detail"); setFeedback(""); setEditTrade(false);
+          setSelected(t); setView("detail"); setFeedback("");
+          if (s.journalView === "edit") { setEditForm({ ...t }); setEditTrade(true); } else setEditTrade(false);
           restoreAnalysisFor(t, tradesRef.current);
           setDetailImgLoading(true);
           sbGetChartImg(t.id).then(img => setSelected(p => p?.id === t.id ? { ...p, chartImg: img } : p)).finally(() => setDetailImgLoading(false));
         }
+      } else if (s.journalView === "add") {
+        setView("add"); setSelected(null); setEditTrade(false); setFeedback("");
       } else {
         if (selectedRef.current) scrollTargetRef.current = `trade-row-${selectedRef.current.id}`;
         setView("list"); setSelected(null); setEditTrade(false); setFeedback(""); setDetailAiAnalysis(""); setSimilarTrades([]);
@@ -1855,7 +1863,7 @@ function JournalTab({ techniques, onOpenLecture }) {
           }}
             style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: view === "list" && !selected && listTab === tab ? (tab === "trash" ? "#7f8c8d" : "#4f8ef7") : "#2a2d3a", color: view === "list" && !selected && listTab === tab ? "#fff" : "#aaa" }}>{label}</button>
         ))}
-        <button onClick={() => { setView("add"); setSelected(null); setFeedback(""); setAiAnalysis(""); setSelectMode(false); setSelectedIds(new Set()); }}
+        <button onClick={() => { if (view !== "add") window.history.pushState({ ...(window.history.state || {}), journalView: "add", journalId: undefined }, ""); setView("add"); setSelected(null); setFeedback(""); setAiAnalysis(""); setSelectMode(false); setSelectedIds(new Set()); }}
           style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: view === "add" ? "#4f8ef7" : "#2a2d3a", color: view === "add" ? "#fff" : "#aaa" }}>매매 추가</button>
         {view === "list" && !selected && (
           <button onClick={() => {
@@ -2384,7 +2392,7 @@ function JournalTab({ techniques, onOpenLecture }) {
                 <span style={{ fontSize: 13, color: "#666" }}>{selected.date}</span>
                 {selected.technique && <span style={{ background: categoryColor(selected.technique), fontSize: 12, padding: "2px 8px", borderRadius: 4, color: "#fff" }}>{selected.technique}</span>}
                 <span style={{ marginLeft: "auto", fontSize: 18, fontWeight: 700, color: pnlColor(parseFloat(selected.pnlRate)) }}>{parseFloat(selected.pnlRate) > 0 ? "+" : ""}{selected.pnlRate}%</span>
-                <button onClick={() => { setEditForm({ ...selected }); setEditTrade(true); setFeedback(""); setDeleteConfirmId(null); }}
+                <button onClick={() => { window.history.pushState({ ...(window.history.state || {}), journalView: "edit", journalId: selected.id }, ""); setEditForm({ ...selected }); setEditTrade(true); setFeedback(""); setDeleteConfirmId(null); }}
                   style={{ padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>수정</button>
                 <button onClick={handleDuplicate}
                   style={{ padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>📋 복제</button>
@@ -2735,11 +2743,13 @@ function RealTradeTab() {
     window.history.replaceState({ ...(window.history.state || {}), liveView: "list" }, "");
     const handlePop = (e) => {
       const s = e.state || {};
-      if (s.liveView === "detail" && s.liveId) {
+      if ((s.liveView === "detail" || s.liveView === "edit") && s.liveId) {
         const t = lTradesRef.current.find(x => x.id === s.liveId);
-        if (t) openDetail(t);
-      } else if (selectedRef.current) {
-        scrollTargetRef.current = `live-row-${selectedRef.current.id}`;
+        if (t) { openDetail(t); if (s.liveView === "edit") { setEditForm({ ...t }); setEditTrade(true); } else setEditTrade(false); }
+      } else if (s.liveView === "add") {
+        setView("add"); setSelected(null); setEditTrade(false); setFeedback("");
+      } else {
+        if (selectedRef.current) scrollTargetRef.current = `live-row-${selectedRef.current.id}`;
         setView("list"); setSelected(null); setFeedback(""); setEditTrade(false);
       }
     };
@@ -2936,7 +2946,7 @@ function RealTradeTab() {
             style={{ background: "#2a2d3a", border: "none", borderRadius: 5, color: "#aaa", padding: "4px 8px", fontSize: 12, colorScheme: "dark", cursor: "pointer" }}
             title="날짜로 이동" />
         )}
-        <button onClick={() => { if (view === "add") return; setView("add"); setSelected(null); setFeedback(""); setForm({ title: "", stock: "", date: "", textContent: "", images: [], category: "" }); }}
+        <button onClick={() => { if (view === "add") return; window.history.pushState({ ...(window.history.state || {}), liveView: "add", liveId: undefined }, ""); setView("add"); setSelected(null); setFeedback(""); setForm({ title: "", stock: "", date: "", textContent: "", images: [], category: "" }); }}
           style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: view === "add" ? "#e74c3c" : "#2a2d3a", color: view === "add" ? "#fff" : "#aaa" }}>
           추가
         </button>
@@ -3133,7 +3143,7 @@ function RealTradeTab() {
                       ))}
                     </div>
                   )}
-                  <button onClick={() => { if (editTrade) return; setEditForm({ ...selected }); setEditTrade(true); setFeedback(""); setDeleteConfirmId(null); }}
+                  <button onClick={() => { if (editTrade) return; window.history.pushState({ ...(window.history.state || {}), liveView: "edit", liveId: selected.id }, ""); setEditForm({ ...selected }); setEditTrade(true); setFeedback(""); setDeleteConfirmId(null); }}
                     style={{ marginLeft: "auto", padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>수정</button>
                   {deleteConfirmId === selected.id ? (
                     <>
@@ -3373,6 +3383,15 @@ function StatsTab() {
     sbGetTrades().then(rows => { setTrades(rows.map(rowToTrade)); setLoading(false); }).catch(() => setLoading(false));
   }, []);
 
+  // 서브탭도 브라우저 뒤로가기/앞으로가기 지원
+  useEffect(() => {
+    window.history.replaceState({ ...(window.history.state || {}), statSub: "overview" }, "");
+    const handlePop = (e) => { const v = e.state?.statSub; if (v) setSubTab(v); };
+    window.addEventListener("popstate", handlePop);
+    return () => window.removeEventListener("popstate", handlePop);
+  }, []);
+  const changeSub = (k) => { window.history.pushState({ ...(window.history.state || {}), statSub: k }, ""); setSubTab(k); };
+
   if (loading) return <div style={{ color: "#555", padding: 40, textAlign: "center" }}>로딩 중...</div>;
   if (!trades.length) return <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>매매 데이터 없음</div>;
 
@@ -3415,7 +3434,7 @@ function StatsTab() {
 
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
         {SUB_TABS.map(([k, lbl]) => (
-          <button key={k} onClick={() => setSubTab(k)}
+          <button key={k} onClick={() => changeSub(k)}
             style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: subTab === k ? "#4f8ef7" : "#2a2d3a", color: subTab === k ? "#fff" : "#aaa" }}>{lbl}</button>
         ))}
       </div>
