@@ -720,7 +720,7 @@ const LECTURE_SYSTEM = `당신은 단기 주식 매매 강의록을 구조화하
 - 값 안 줄바꿈은 반드시 \\n 으로 이스케이프.
 - 반드시 유효한 JSON만 출력. 코드블록/설명 금지.`;
 
-function LectureTab() {
+function LectureTab({ pendingLecture, onConsumed }) {
   const [techniques, setTechniques] = useState([]);
   const [loading, setLoading] = useState(true);
   const [input, setInput] = useState("");
@@ -749,6 +749,15 @@ function LectureTab() {
     setLoading(false);
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  // 다른 탭에서 특정 강의록으로 이동 요청(pendingLecture)이 오면 로딩 후 상세 열기
+  useEffect(() => {
+    if (pendingLecture == null || !techniques.length) return;
+    const t = techniques.find(x => x.id === pendingLecture || String(x.id) === String(pendingLecture));
+    if (t) { setSelected(t); setView("detail"); setFeedback(""); }
+    onConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingLecture, techniques]);
 
   const openDetail = (t) => {
     if (window.history.state?.techId !== t.id)
@@ -998,8 +1007,9 @@ function LectureTab() {
 }
 
 // ==================== 매매일지 탭 ====================
-function JournalTab({ techniques }) {
+function JournalTab({ techniques, onOpenLecture }) {
   const [trades, setTrades] = useState([]);
+  const [recLectureId, setRecLectureId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState("list");
   const [inputMode, setInputMode] = useState("img0606");
@@ -1089,9 +1099,11 @@ function JournalTab({ techniques }) {
     if (cached) {
       setDetailAiAnalysis(cached.text);
       setSimilarTrades(cached.similarIds.map(id => allTrades.find(x => x.id === id)).filter(Boolean));
+      setRecLectureId(cached.recLectureId ?? null);
     } else {
       setDetailAiAnalysis("");
       setSimilarTrades(trade.aiAnalysis ? calcSimilarTrades(trade, allTrades) : []);
+      setRecLectureId(null);
     }
   };
 
@@ -1440,14 +1452,14 @@ function JournalTab({ techniques }) {
       });
       const otherTechs = techniques.filter(t => !relatedTechs.includes(t));
       const techSummary = relatedTechs.map(t =>
-        `[${t.name}] 카테고리:${t.category} / 타임프레임:${t.timeframe || "-"}\n` +
+        `[ID:${t.id}] [${t.name}] 카테고리:${t.category} / 타임프레임:${t.timeframe || "-"}\n` +
         `- 매수조건:${t.entry?.condition || "-"} / 포지션:${t.entry?.position || "-"} / 주의:${t.entry?.caution || "-"}\n` +
         `- 패턴(진입전→트리거→진입후): ${t.pattern?.before || "-"} → ${t.pattern?.trigger || "-"} → ${t.pattern?.after || "-"}\n` +
         `- 청산(수익/손실): ${t.exit?.profit || "-"} / ${t.exit?.loss || "-"}` +
         (t.rawInput ? `\n- 원문: ${t.rawInput.slice(0, 500)}` : '')
       ).join('\n\n');
       const otherTechSummary = otherTechs.map(t =>
-        `[${t.name}] 카테고리:${t.category} / 매수조건:${t.entry?.condition || "-"} / 트리거:${t.pattern?.trigger || "-"} / 태그:${(t.tags || []).join(",") || "-"}`
+        `[ID:${t.id}] [${t.name}] 카테고리:${t.category} / 매수조건:${t.entry?.condition || "-"} / 트리거:${t.pattern?.trigger || "-"} / 태그:${(t.tags || []).join(",") || "-"}`
       ).join('\n');
       const techNote = relatedTechs.length
         ? ""
@@ -1560,15 +1572,19 @@ function JournalTab({ techniques }) {
         `4. 잘된 점 / 개선할 점 (기법 부합도 중심)\n` +
         `5. 동일 날짜 실전매매와의 연관성 (시장 상황 등 참고할 점이 있다면)\n` +
         `6. 과거 유사 매매 비교: 매매이유에 등장한 워딩(표현)이 이번 매매와 얼마나 비슷한지\n\n` +
-        `※ 응답 맨 마지막 줄에 과거 유사 매매 중 가장 유사한 것 최대 5개의 ID를 아래 형식으로만 출력(다른 텍스트 없이): SIMILAR:[id1,id2,...]`
+        `※ 응답 맨 끝에 아래 두 줄을 순서대로, 다른 텍스트 없이 정확히 이 형식으로만 출력:\n` +
+        `LECTURE:강의록ID  (이번 매매 상황·기법에 가장 적합한 강의록 1개의 ID. 위 [적용 기법 강의록]과 [기타 강의록 목록]의 [ID:...] 중에서 원문·상황을 비교해 딱 하나만 고를 것)\n` +
+        `SIMILAR:[id1,id2,...]  (과거 유사 매매 중 가장 유사한 것 최대 5개의 ID)`
       });
 
       const result = await claude("주식 매매 분석 전문가. 핵심만 간결하게. 분석은 반드시 [적용 기법 강의록] 내용에 근거하고, 강의록에 없는 내용을 일반론으로 단정하지 않는다. 차트 이미지가 없으면 차트 관련 내용을 지어내지 않는다. 차트에서 보이는 내용이 기법 설명과 무관하면 무시한다. [중요] '정답매매'는 사용자가 실제 실행한 매매가 아닌, 해당 기법 기준으로 올바르게 했어야 할 이상적 시나리오다. 절대 실제 매매 내용을 정답매매로 제시하지 않는다.",
         userContent, 8000, undefined, "claude-fable-5");
-      // 응답 끝에서 SIMILAR:[...] 추출
+      // 응답 끝에서 LECTURE:id 와 SIMILAR:[...] 추출
       const simMatch = result.match(/SIMILAR:\[([\d,\s]*)\]/);
-      const analysisText = result.replace(/\n?SIMILAR:\[[\d,\s]*\]\s*$/, '').trim();
+      const lecMatch = result.match(/LECTURE:\s*(\d+)/);
+      const analysisText = result.replace(/\n?LECTURE:\s*\d+\s*/g, '').replace(/\n?SIMILAR:\[[\d,\s]*\]\s*$/, '').trim();
       setDetailAiAnalysis(analysisText);
+      setRecLectureId(lecMatch ? parseInt(lecMatch[1]) : null);
       let sims;
       if (simMatch) {
         const ids = simMatch[1].split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
@@ -1577,7 +1593,7 @@ function JournalTab({ techniques }) {
         sims = calcSimilarTrades(selected, trades);
       }
       setSimilarTrades(sims);
-      analysisCacheRef.current[selected.id] = { text: analysisText, similarIds: sims.map(t => t.id) };
+      analysisCacheRef.current[selected.id] = { text: analysisText, similarIds: sims.map(t => t.id), recLectureId: lecMatch ? parseInt(lecMatch[1]) : null };
     } catch (e) { setFeedback(`❌ ${e.message}`); }
     setDetailAiLoading(false);
   };
@@ -2474,6 +2490,19 @@ function JournalTab({ techniques }) {
                 ) : (
                   (detailAiAnalysis || selected.aiAnalysis) && <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad", whiteSpace: "normal", lineHeight: 1.7 }}><MD text={detailAiAnalysis || selected.aiAnalysis} /></div>
                 )}
+                {!aiEditMode && recLectureId && (() => {
+                  const rec = techniques.find(t => t.id === recLectureId);
+                  if (!rec) return null;
+                  const li = techniques.findIndex(t => t.id === recLectureId);
+                  return (
+                    <button onClick={() => onOpenLecture?.(recLectureId)}
+                      style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "9px 12px", background: "#12301a", border: "1px solid #2e7d32", borderRadius: 8, color: "#8ee0a0", cursor: "pointer", fontSize: 13, textAlign: "left" }}>
+                      <span style={{ fontSize: 15 }}>📚</span>
+                      <span style={{ fontWeight: 600 }}>추천 강의{li >= 0 && li < 51 ? ` ${li + 1}강` : ""}: {rec.name}</span>
+                      <span style={{ marginLeft: "auto", color: "#4caf50" }}>보러가기 →</span>
+                    </button>
+                  );
+                })()}
                 {similarTrades.length > 0 && (
                   <div style={{ marginTop: 10, padding: "10px 12px", background: "#12161e", border: "1px solid #2a2d3a", borderRadius: 8 }}>
                     <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>📎 AI 선정 유사 매매 ({similarTrades.length}건)</div>
@@ -3476,8 +3505,16 @@ function StatsTab() {
 export default function App() {
   const [activeTab, setActiveTab] = useState(0);
   const [techniques, setTechniques] = useState([]);
+  const [pendingLecture, setPendingLecture] = useState(null);
   const [showScrollTop, setShowScrollTop] = useState(false);
   const isMobile = useIsMobile();
+
+  // 강의록으로 크로스탭 이동 (매매일지 분석의 추천 강의 버튼 등)
+  const openLecture = (id) => {
+    window.history.pushState({ appTab: 3 }, "");
+    setActiveTab(3);
+    setPendingLecture(id);
+  };
 
   useEffect(() => {
     sbGet("techniques").then(rows => setTechniques(rows.map(rowToTech))).catch(() => {});
@@ -3526,9 +3563,9 @@ export default function App() {
       </div>
       <div style={{ padding: isMobile ? 12 : 20, maxWidth: 960, margin: "0 auto" }}>
         {activeTab === 0 && <DashboardTab onNavigate={handleTabChange} />}
-        {activeTab === 1 && <JournalTab techniques={techniques} />}
+        {activeTab === 1 && <JournalTab techniques={techniques} onOpenLecture={openLecture} />}
         {activeTab === 2 && <StatsTab />}
-        {activeTab === 3 && <LectureTab />}
+        {activeTab === 3 && <LectureTab pendingLecture={pendingLecture} onConsumed={() => setPendingLecture(null)} />}
         {activeTab === 4 && <RealTradeTab />}
       </div>
       {showScrollTop && (
