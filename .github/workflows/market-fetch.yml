@@ -1,0 +1,33 @@
+name: 시세수집
+
+# 매일 장 마감 후 매매일지 신규 종목·날짜의 일봉/지수 데이터를 수집해 Supabase에 저장.
+# 무인 실행(로컬 PC·바탕화면 버튼 불필요). scripts/fetch_market.py 재사용.
+
+on:
+  schedule:
+    # 매일 20:40 KST(11:40 UTC) — NXT 연장거래(~20:00)까지 끝난 뒤라 당일 일봉 확정.
+    # 러너 TZ=Asia/Seoul로 스크립트의 18:30 당일 가드가 KST 기준으로 통과됨.
+    - cron: "40 11 * * *"
+  workflow_dispatch: {}   # 필요 시 Actions 탭에서 수동 실행
+
+concurrency:
+  group: market-fetch
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Seoul
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 의존성 설치
+        run: pip install finance-datareader
+
+      - name: 시세 수집 (신규만 → Supabase 업로드)
+        run: python scripts/fetch_market.py upload
