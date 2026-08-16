@@ -1014,6 +1014,12 @@ function LectureTab({ pendingLecture, onConsumed }) {
   );
 }
 
+// 추천 강의 ID를 분석 텍스트 끝에 숨김 마커로 저장 → 새로고침 후에도 복원(별도 컬럼 불필요)
+const LEC_RE = /\n?<!--LEC:(\d+)-->\s*$/;
+const stripLec = (s) => (s ? s.replace(LEC_RE, "").trim() : s);
+const parseLec = (s) => { const m = s && s.match(LEC_RE); return m ? parseInt(m[1]) : null; };
+const withLec = (text, id) => (id ? `${text}\n<!--LEC:${id}-->` : text);
+
 // ==================== 매매일지 탭 ====================
 function JournalTab({ techniques, onOpenLecture }) {
   const [trades, setTrades] = useState([]);
@@ -1111,7 +1117,7 @@ function JournalTab({ techniques, onOpenLecture }) {
     } else {
       setDetailAiAnalysis("");
       setSimilarTrades(trade.aiAnalysis ? calcSimilarTrades(trade, allTrades) : []);
-      setRecLectureId(null);
+      setRecLectureId(parseLec(trade.aiAnalysis));  // 저장된 분석의 숨김 마커에서 추천 강의 복원
     }
   };
 
@@ -1608,18 +1614,20 @@ function JournalTab({ techniques, onOpenLecture }) {
       }
       setSimilarTrades(sims);
       analysisCacheRef.current[selected.id] = { text: analysisText, similarIds: sims.map(t => t.id), recLectureId: lecMatch ? parseInt(lecMatch[1]) : null };
-      // 분석 결과 자동 저장 (비용 든 결과 유실 방지) — 다른 매매로 이동해 있어도 원래 대상에만 반영
+      // 분석 결과 자동 저장 (비용 든 결과 유실 방지) — 다른 매매로 이동해 있어도 원래 대상에만 반영.
+      // 추천 강의 ID는 숨김 마커로 함께 저장해 새로고침 후에도 추천 버튼이 복원되게 함.
       try {
-        await sbPatch(selected.id, { ai_analysis: analysisText });
-        setTrades(p => p.map(t => t.id === selected.id ? { ...t, aiAnalysis: analysisText } : t));
-        setSelected(s => (s && s.id === selected.id ? { ...s, aiAnalysis: analysisText } : s));
+        const toSave = withLec(analysisText, lecMatch ? parseInt(lecMatch[1]) : null);
+        await sbPatch(selected.id, { ai_analysis: toSave });
+        setTrades(p => p.map(t => t.id === selected.id ? { ...t, aiAnalysis: toSave } : t));
+        setSelected(s => (s && s.id === selected.id ? { ...s, aiAnalysis: toSave } : s));
       } catch {}
     } catch (e) { setFeedback(`❌ ${e.message}`); }
     setDetailAiLoading(false);
   };
 
   const handleCorrection = async () => {
-    const original = detailAiAnalysis || selected?.aiAnalysis || "";
+    const original = stripLec(detailAiAnalysis || selected?.aiAnalysis) || "";
     const corrected = aiEditText.trim();
     setAiEditMode(false);
     if (corrected && corrected !== original) {
@@ -2464,7 +2472,7 @@ function JournalTab({ techniques, onOpenLecture }) {
                         {detailAiLoading ? "분석 중..." : (detailAiAnalysis || selected.aiAnalysis) ? "재분석" : "분석 시작"}
                       </button>
                       {(detailAiAnalysis || selected.aiAnalysis) && (
-                        <button onClick={() => { setAiEditText(detailAiAnalysis || selected.aiAnalysis || ""); setAiEditMode(true); }}
+                        <button onClick={() => { setAiEditText(stripLec(detailAiAnalysis || selected.aiAnalysis) || ""); setAiEditMode(true); }}
                           style={{ padding: "3px 10px", background: "#2a3a2a", color: "#4caf50", border: "1px solid #4caf5055", borderRadius: 5, cursor: "pointer", fontSize: 11 }}>✏️ 수정</button>
                       )}
                       {detailAiAnalysis && (
@@ -2474,12 +2482,13 @@ function JournalTab({ techniques, onOpenLecture }) {
                           setSimilarTrades(selected.aiAnalysis ? calcSimilarTrades(selected, trades) : []);
                         }} style={{ padding: "3px 10px", background: "#2a2d3a", color: "#aaa", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 11 }}>초기화</button>
                       )}
-                      {detailAiAnalysis && detailAiAnalysis !== selected.aiAnalysis && (
+                      {detailAiAnalysis && detailAiAnalysis !== stripLec(selected.aiAnalysis) && (
                         <button onClick={async () => {
                           try {
-                            await sbPatch(selected.id, { ai_analysis: detailAiAnalysis });
-                            setSelected(p => ({ ...p, aiAnalysis: detailAiAnalysis }));
-                            setTrades(p => p.map(t => t.id === selected.id ? { ...t, aiAnalysis: detailAiAnalysis } : t));
+                            const toSave = withLec(detailAiAnalysis, recLectureId);
+                            await sbPatch(selected.id, { ai_analysis: toSave });
+                            setSelected(p => ({ ...p, aiAnalysis: toSave }));
+                            setTrades(p => p.map(t => t.id === selected.id ? { ...t, aiAnalysis: toSave } : t));
                             setFeedback("✅ AI 분석 저장됨");
                           } catch (e) { setFeedback(`❌ ${e.message}`); }
                         }} style={{ padding: "3px 12px", background: "#4f8ef7", color: "#fff", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 11 }}>💾 저장</button>
@@ -2493,7 +2502,7 @@ function JournalTab({ techniques, onOpenLecture }) {
                               setTrades(p => p.map(t => t.id === selected.id ? { ...t, aiAnalysis: null } : t));
                             }
                             delete analysisCacheRef.current[selected.id];
-                            setDetailAiAnalysis(""); setSimilarTrades([]);
+                            setDetailAiAnalysis(""); setSimilarTrades([]); setRecLectureId(null);
                             setFeedback("✅ AI 분석 삭제됨");
                           } catch (e) { setFeedback(`❌ ${e.message}`); }
                         }} style={{ padding: "2px 8px", background: "#3a1a1a", border: "none", color: "#e74c3c", borderRadius: 4, cursor: "pointer", fontSize: 11 }}>삭제</button>
@@ -2509,7 +2518,7 @@ function JournalTab({ techniques, onOpenLecture }) {
                     style={{ width: "100%", minHeight: 320, background: "#0f1a10", border: "1px solid #4caf50", borderRadius: 8, color: "#e0e0e0", padding: 12, fontSize: 13, resize: "vertical", boxSizing: "border-box", lineHeight: 1.7, whiteSpace: "pre-wrap" }}
                   />
                 ) : (
-                  (detailAiAnalysis || selected.aiAnalysis) && <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad", whiteSpace: "normal", lineHeight: 1.7 }}><MD text={detailAiAnalysis || selected.aiAnalysis} /></div>
+                  (detailAiAnalysis || selected.aiAnalysis) && <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad", whiteSpace: "normal", lineHeight: 1.7 }}><MD text={stripLec(detailAiAnalysis || selected.aiAnalysis)} /></div>
                 )}
                 {!aiEditMode && recLectureId && (() => {
                   const rec = techniques.find(t => t.id === recLectureId);
