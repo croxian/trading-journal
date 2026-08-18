@@ -2719,8 +2719,9 @@ function ImgGrid({ images, onRemove, onReorder }) {
 }
 
 // ==================== 실전매매 탭 ====================
-function RealTradeTab() {
+function RealTradeTab({ techniques = [], onOpenLecture }) {
   const [lTrades, setLTrades] = useState([]);
+  const [recLectureId, setRecLectureId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState("list");
   const [search, setSearch] = useState("");
@@ -2811,6 +2812,7 @@ function RealTradeTab() {
       window.history.pushState({ ...(window.history.state || {}), liveView: "detail", liveId: trade.id }, "");
     setSelected(trade); setView("detail"); setFeedback(""); setEditTrade(false);
     setAiAnalysis(""); setSimilarTrades(trade.aiAnalysis ? calcSimilar(trade, lTrades) : []);
+    setRecLectureId(parseLec(trade.aiAnalysis));  // 저장된 분석의 숨김 마커에서 추천 강의 복원
     setImgIdx(0); setImgScale(1); setContentTab(search.trim() ? "full" : "summary"); setAiSummary("");
     // 이미지는 목록에서 제외되므로 상세 진입 시 지연 로딩 (이미 있으면 스킵)
     if (!trade.images || trade.images.length === 0) {
@@ -2927,18 +2929,33 @@ function RealTradeTab() {
     try {
       const pastArr = lTrades.filter(t => t.id !== target.id && t.textContent).slice(0, 10);
       const pastText = pastArr.map(t => `[ID:${t.id}] ${t.stock}(${t.date}): ${(t.textContent || "").slice(0, 80)}`).join('\n');
+      // 강의록 DB 요약 - 매매일지와 동일하게, 이 실전매매에 가장 적합한 강의 1개를 추천받기 위함
+      const techSummary = techniques.map(t =>
+        `[ID:${t.id}] [${t.name}] 카테고리:${t.category || "-"} / 매수조건:${t.entry?.condition || "-"} / 트리거:${t.pattern?.trigger || "-"} / 청산(수익/손실):${t.exit?.profit || "-"}/${t.exit?.loss || "-"} / 태그:${(t.tags || []).join(",") || "-"}`
+      ).join('\n');
       const result = await claude(
-        "주식 실전매매 분석 전문가. 카카오톡 매매 메시지를 분석하여 핵심 매매 패턴과 의도를 파악한다.",
-        `[현재 실전매매]\n종목:${target.stock} 날짜:${target.date}\n내용:\n${target.textContent}\n\n[과거 실전매매 참고]\n${pastText || "(없음)"}\n\n아래 항목을 분석:\n1. 매매 의도 및 전략\n2. 핵심 판단 근거\n3. 과거 유사 매매와 비교\n\n※ 응답 맨 마지막 줄에 과거 유사 매매 중 가장 유사한 것 최대 5개의 ID를 아래 형식으로만 출력(다른 텍스트 없이): SIMILAR:[id1,id2,...]`,
+        "주식 실전매매 분석 전문가. 카카오톡 매매 메시지를 분석하여 핵심 매매 패턴과 의도를 파악한다. 강의록 기법과 연관지어 근거를 제시한다.",
+        `[현재 실전매매]\n종목:${target.stock} 날짜:${target.date}\n내용:\n${target.textContent}\n\n` +
+        `[강의록DB - 이번 매매와 가장 유사한 기법 참고]\n${techSummary || "(없음)"}\n\n` +
+        `[과거 실전매매 참고]\n${pastText || "(없음)"}\n\n` +
+        `아래 항목을 분석:\n1. 매매 의도 및 전략\n2. 핵심 판단 근거\n3. 강의록 기법과의 연관성 (가장 부합하는 기법과 그 근거)\n4. 과거 유사 매매와 비교\n\n` +
+        `※ 응답 맨 끝에 아래 두 줄을 순서대로, 다른 텍스트 없이 정확히 이 형식으로만 출력:\n` +
+        `LECTURE:강의록ID  (이번 매매 상황에 가장 적합한 강의록 1개의 ID. 위 [강의록DB]의 [ID:...] 중에서 딱 하나만 고를 것. 적합한 것이 없으면 이 줄 생략)\n` +
+        `SIMILAR:[id1,id2,...]  (과거 유사 매매 중 가장 유사한 것 최대 5개의 ID)`,
         2000, undefined, "claude-fable-5"
       );
       const simMatch = result.match(/SIMILAR:\[([\d,\s]*)\]/);
-      const analysisText = result.replace(/\n?SIMILAR:\[[\d,\s]*\]\s*$/, '').trim();
-      // 백그라운드 자동 저장: 페이지를 나가거나 다른 종목을 열어도 원래 대상에 저장되어 유실되지 않음
+      const lecMatch = result.match(/LECTURE:\s*(\d+)/);
+      const analysisText = result.replace(/\n?LECTURE:\s*\d+\s*/g, '').replace(/\n?SIMILAR:\[[\d,\s]*\]\s*$/, '').trim();
+      const recId = lecMatch ? parseInt(lecMatch[1]) : null;
+      setRecLectureId(recId);
+      // 백그라운드 자동 저장: 페이지를 나가거나 다른 종목을 열어도 원래 대상에 저장되어 유실되지 않음.
+      // 추천 강의 ID는 숨김 마커로 함께 저장해 새로고침 후에도 추천 버튼이 복원되게 함.
       try {
-        await sbPatchLive(target.id, { ai_analysis: analysisText });
-        setLTrades(p => p.map(t => t.id === target.id ? { ...t, aiAnalysis: analysisText } : t));
-        setSelected(s => (s && s.id === target.id ? { ...s, aiAnalysis: analysisText } : s));
+        const toSave = withLec(analysisText, recId);
+        await sbPatchLive(target.id, { ai_analysis: toSave });
+        setLTrades(p => p.map(t => t.id === target.id ? { ...t, aiAnalysis: toSave } : t));
+        setSelected(s => (s && s.id === target.id ? { ...s, aiAnalysis: toSave } : s));
       } catch (e) { setFeedback(`⚠️ 저장 실패(분석은 완료): ${e.message}`); }
       setAiAnalysis(""); // 저장됨 섹션으로 표시되므로 임시 상태 비움
       const sims = simMatch
@@ -3264,12 +3281,25 @@ function RealTradeTab() {
                         try {
                           await sbPatchLive(selected.id, { ai_analysis: null });
                           const updated = { ...selected, aiAnalysis: null };
-                          setSelected(updated); setLTrades(p => p.map(t => t.id === selected.id ? updated : t));
+                          setSelected(updated); setLTrades(p => p.map(t => t.id === selected.id ? updated : t)); setRecLectureId(null);
                           setFeedback("✅ AI 분석 삭제됨");
                         } catch (e) { setFeedback(`❌ ${e.message}`); }
                       }} style={{ padding: "2px 8px", background: "#3a1a1a", border: "none", color: "#e74c3c", borderRadius: 4, cursor: "pointer", fontSize: 11 }}>삭제</button>
                     </div>
-                    <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad", whiteSpace: "normal" }}><MD text={selected.aiAnalysis} /></div>
+                    <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad", whiteSpace: "normal" }}><MD text={stripLec(selected.aiAnalysis)} /></div>
+                    {recLectureId && (() => {
+                      const rec = techniques.find(t => t.id === recLectureId);
+                      if (!rec) return null;
+                      const li = techniques.findIndex(t => t.id === recLectureId);
+                      return (
+                        <button onClick={() => onOpenLecture?.(recLectureId)}
+                          style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "9px 12px", background: "#12301a", border: "1px solid #2e7d32", borderRadius: 8, color: "#8ee0a0", cursor: "pointer", fontSize: 13, textAlign: "left" }}>
+                          <span style={{ fontSize: 15 }}>📚</span>
+                          <span style={{ fontWeight: 600 }}>추천 강의{li >= 0 && li < 51 ? ` ${li + 1}강` : ""}: {rec.name}</span>
+                          <span style={{ marginLeft: "auto", color: "#4caf50" }}>보러가기 →</span>
+                        </button>
+                      );
+                    })()}
                   </div>
                 )}
                 <div style={{ marginTop: 4 }}>
@@ -3610,7 +3640,7 @@ export default function App() {
         {activeTab === 1 && <JournalTab techniques={techniques} onOpenLecture={openLecture} />}
         {activeTab === 2 && <StatsTab />}
         {activeTab === 3 && <LectureTab pendingLecture={pendingLecture} onConsumed={() => setPendingLecture(null)} />}
-        {activeTab === 4 && <RealTradeTab />}
+        {activeTab === 4 && <RealTradeTab techniques={techniques} onOpenLecture={openLecture} />}
       </div>
       {showScrollTop && (
         <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
