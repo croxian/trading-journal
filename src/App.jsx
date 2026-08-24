@@ -2942,7 +2942,7 @@ function RealTradeTab({ techniques = [], onOpenLecture }) {
         `※ 응답 맨 끝에 아래 두 줄을 순서대로, 다른 텍스트 없이 정확히 이 형식으로만 출력:\n` +
         `LECTURE:강의록ID  (이번 매매 상황에 가장 적합한 강의록 1개의 ID. 위 [강의록DB]의 [ID:...] 중에서 딱 하나만 고를 것. 적합한 것이 없으면 이 줄 생략)\n` +
         `SIMILAR:[id1,id2,...]  (과거 유사 매매 중 가장 유사한 것 최대 5개의 ID)`,
-        2000, undefined, "claude-fable-5"
+        8000, undefined, "claude-fable-5"
       );
       const simMatch = result.match(/SIMILAR:\[([\d,\s]*)\]/);
       const lecMatch = result.match(/LECTURE:\s*(\d+)/);
