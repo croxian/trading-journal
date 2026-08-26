@@ -1514,6 +1514,8 @@ function JournalTab({ techniques, onOpenLecture }) {
       // 3. 동일 날짜 실전매매 내용/차트 참고 + '강의' 분류 실전매매를 전역 레퍼런스로 활용
       let liveSection = "(없음)";
       let lectureRefSection = "(없음)";
+      let sameStockLiveNote = "";       // 동일 날짜+동일 종목 교본(실전매매) 카톡 원문 - B/S 비교 근거
+      let liveImgIsSameStock = false;   // 첨부된 실전매매 이미지가 '동일 종목 교본' 차트인지
       const liveImageBlocks = [];
       try {
         const liveRows = await sbGetLiveTrades();
@@ -1528,6 +1530,10 @@ function JournalTab({ techniques, onOpenLecture }) {
         if (liveMatches.length) {
           liveSection = liveMatches.map(t => `[${t.stock}]${t.title ? ` ${t.title}` : ""}\n${(t.textContent || "").slice(0, 400)}`).join('\n---\n');
           const sameStock = liveMatches.filter(t => matchStock(t.stock, selected.stock));
+          if (sameStock.length) {   // 동일 종목·동일 날짜 교본이 있으면 B/S 비교용 카톡 원문 확보
+            liveImgIsSameStock = true;
+            sameStockLiveNote = sameStock.map(t => `[교본: ${t.stock}${t.title ? " " + t.title : ""}]\n당일 카톡 원문: ${(t.textContent || "").slice(0, 1400)}`).join('\n---\n');
+          }
           // 목록 조회는 이미지를 제외하므로, 매칭된 실전매매의 이미지는 개별 지연 로딩
           const imgTargets = sameStock.length ? sameStock : liveMatches;
           for (const t of imgTargets) {
@@ -1567,7 +1573,7 @@ function JournalTab({ techniques, onOpenLecture }) {
         (selected.technique === "상따" ? "\n- [상따 기법 규칙] 전일 차트는 상한가로 마감한 것이다(가격제한폭 상단에 수평으로 붙어 마감한 형태). 상따는 정의상 '전일 상한가에서 매수'하는 기법이므로, 입력된 매수가 = 전일 상한가 진입가로 간주할 것. B 마커가 차트에 보이지 않아도 상한가 매수로 전제하고, 상한가 가격은 커서선/수평선이 아니라 입력된 매수가로 판단할 것. 차트에 '최저' 주석 가격이 매수가와 같거나 비슷하게 표시되더라도, 그것은 전일 상한가를 훼손하지 않은 일중 저점일 뿐이므로 입력 매수가를 '저점 선매수'나 '상따 원칙 위반'으로 재해석하지 말 것. 당일은 상한가 다음날로서 갭상승 또는 보합 출발하는 흐름을 중점 분석할 것. 당일 갭하락 출발인 경우는 '상따'가 아닌 '상한가하락시작' 기법에 해당하므로 혼동하지 말 것." : "") +
         (selected.technique?.startsWith("상한가하락시작") ? "\n- [상한가하락시작 기법 규칙] 전일 차트는 상한가로 마감한 것이다(가격제한폭 상단에 수평으로 붙어 마감한 형태로 확인 가능). 당일은 상한가 다음날이나 갭하락 또는 약세 출발하는 흐름이다. 전일 상한가 마감 후 당일 하락 출발 시점의 매매 맥락을 중점 분석할 것." : "");
       const imageNote = (selected.chartImg || liveImageBlocks.length)
-        ? `[첨부 이미지]${selected.chartImg ? `\n- 이 매매의 차트 이미지 (캔들 모양, 진입/이탈 시간대 분석에 활용)${chartAxisNote}${chartMarkupNote}` : ""}${liveImageBlocks.length ? `\n- 동일 날짜 실전매매 관련 이미지 ${liveImageBlocks.length}장` : ""}\n이미지에서 실제로 확인 가능한 내용만 사용하고, 기법 설명과 무관하거나 불확실한 내용은 언급하지 말 것.`
+        ? `[첨부 이미지]${selected.chartImg ? `\n- (첫 번째 차트) 이 매매일지의 차트 이미지 = 내 매수(B)/매도(S) (캔들 모양, 진입/이탈 시간대 분석에 활용)${chartAxisNote}${chartMarkupNote}` : ""}${liveImageBlocks.length ? (liveImgIsSameStock ? `\n- (이후 ${liveImageBlocks.length}장) [교본 차트] '동일 날짜·동일 종목'의 교본(실전매매=강사 실제 매매) 차트다. 이 차트의 B(매수)/S(매도) 마커는 강사(교본)의 실제 진입/청산 지점이다. 위 차트 판독 규칙(B/S·네모·동그라미·% 주석·수평선·시간축)을 교본 차트에도 동일하게 적용하고, 내 매매일지 차트의 B/S와 교본 차트의 B/S를 직접 비교하여 진입·청산 타이밍/가격 차이를 파악할 것.` : `\n- 동일 날짜 실전매매 관련 이미지 ${liveImageBlocks.length}장`) : ""}\n이미지에서 실제로 확인 가능한 내용만 사용하고, 기법 설명과 무관하거나 불확실한 내용은 언급하지 말 것.`
         : `[첨부 이미지] 없음. 차트 기반 분석(봉 모양, 시간대 등)은 시도하지 말고 '차트 없음'으로만 명시할 것. 추측해서 지어내지 말 것.`;
 
       const dayIdx = dayOfWeek(selected.date);
@@ -1583,6 +1589,7 @@ function JournalTab({ techniques, onOpenLecture }) {
         `[기타 강의록 목록 - 위 기법에 없어도 이번 매매와 유사한 내용이 있는지 추가로 확인]\n${otherTechSummary || "(없음)"}\n\n` +
         `[실전 강의 레퍼런스 - 강사가 남긴 상세 실전 강의. 위 강의록과 동등하게 근거로 활용할 것]\n${lectureRefSection}\n\n` +
         `[동일 날짜(${selected.date}) 실전매매 기록]\n${liveSection}\n\n` +
+        (sameStockLiveNote ? `[동일 종목·동일 날짜 교본(실전매매) - B/S 비교 대상, 강사 실제 매매]\n${sameStockLiveNote}\n\n` : "") +
         `[과거 유사 매매 - 매매이유 원문]\n${pastTrades || "(없음)"}\n\n` +
         correctionsCtx +
         `아래 항목을 분석:\n` +
@@ -1590,7 +1597,9 @@ function JournalTab({ techniques, onOpenLecture }) {
         `2. 차트 분석: 첨부된 차트가 있다면 봉의 모양과 진입/이탈 시간대가 기법의 트리거·패턴 설명과 일치하는지 확인. 차트가 없거나 기법과 무관한 내용은 생략\n` +
         `3. 정답매매: 강의록 기법 기준 이상적 진입/손절/익절 시나리오 (실제 매매 아님). 금액은 같은 표기 규칙으로 괄호 안 숫자(만원) 표기, 퍼센트 금지\n` +
         `4. 잘된 점 / 개선할 점 (기법 부합도 중심)\n` +
-        `5. 동일 날짜 실전매매와의 연관성 (시장 상황 등 참고할 점이 있다면)\n` +
+        (sameStockLiveNote
+          ? `5. [교본과의 B/S 비교] 동일 날짜·동일 종목의 교본(실전매매=강사 실제 매매) 차트가 첨부되어 있다. 교본 차트의 B/S와 이 매매일지 차트의 B/S를 하나씩 비교하여 (1)진입 시점 (2)청산 시점 (3)가격대가 교본과 구체적으로 어떻게 달랐는지, 교본 대비 무엇이 아쉬웠고 무엇을 배울지를 [적용 기법 강의록]과 [동일 종목 교본 당일 카톡]을 근거로 명시. 교본 카톡에서 강사가 밝힌 진입/청산 이유를 인용하고, 그 판단과 내 매매의 차이를 지적할 것\n`
+          : `5. 동일 날짜 실전매매와의 연관성 (시장 상황 등 참고할 점이 있다면)\n`) +
         `6. 과거 유사 매매 비교: 매매이유에 등장한 워딩(표현)이 이번 매매와 얼마나 비슷한지\n\n` +
         `※ 응답 맨 끝에 아래 두 줄을 순서대로, 다른 텍스트 없이 정확히 이 형식으로만 출력:\n` +
         `LECTURE:강의록ID  (이번 매매 상황·기법에 가장 적합한 강의록 1개의 ID. 위 [적용 기법 강의록]과 [기타 강의록 목록]의 [ID:...] 중에서 원문·상황을 비교해 딱 하나만 고를 것)\n` +
@@ -2929,20 +2938,41 @@ function RealTradeTab({ techniques = [], onOpenLecture }) {
     try {
       const pastArr = lTrades.filter(t => t.id !== target.id && t.textContent).slice(0, 10);
       const pastText = pastArr.map(t => `[ID:${t.id}] ${t.stock}(${t.date}): ${(t.textContent || "").slice(0, 80)}`).join('\n');
-      // 강의록 DB 요약 - 매매일지와 동일하게, 이 실전매매에 가장 적합한 강의 1개를 추천받기 위함
+      // 강의록 DB 요약 - 강의 추천 + 차트 B/S 분석의 '기본 지식'
       const techSummary = techniques.map(t =>
         `[ID:${t.id}] [${t.name}] 카테고리:${t.category || "-"} / 매수조건:${t.entry?.condition || "-"} / 트리거:${t.pattern?.trigger || "-"} / 청산(수익/손실):${t.exit?.profit || "-"}/${t.exit?.loss || "-"} / 태그:${(t.tags || []).join(",") || "-"}`
       ).join('\n');
-      const result = await claude(
-        "주식 실전매매 분석 전문가. 카카오톡 매매 메시지를 분석하여 핵심 매매 패턴과 의도를 파악한다. 강의록 기법과 연관지어 근거를 제시한다.",
-        `[현재 실전매매]\n종목:${target.stock} 날짜:${target.date}\n내용:\n${target.textContent}\n\n` +
-        `[강의록DB - 이번 매매와 가장 유사한 기법 참고]\n${techSummary || "(없음)"}\n\n` +
+      // 차트 이미지 로딩(목록엔 이미지 제외 → 개별 로딩). 차트의 B/S를 강의록+당일 카톡 기반으로 분석
+      let imgs = target.images?.length ? target.images : [];
+      if (!imgs.length) { try { imgs = await sbGetLiveImages(target.id); } catch {} }
+      const chartNote = imgs.length
+        ? `[첨부 차트 이미지 ${imgs.length}장] 이 실전매매(강사 교본)의 차트다. 아래 규칙으로 B/S를 분석할 것:\n` +
+          `- 파란/빨간 오각형(B/S 글자)은 강사가 실제 체결한 매수(B)/매도(S) 지점이다. 차트는 좌→우 시간순(왼쪽=과거).\n` +
+          `- 사각형(네모)=이상적 매수 타점, 동그라미(원/타원)=이상적 매도 타점(정답매매). 보이면 실제 B/S와 위치·가격을 비교.\n` +
+          `- 차트의 %주석·수평선·'최고/최저' 옆 가격은 손익이나 매매가가 아니다(HTS 자동표시). 진입/청산가는 B/S 마커 위치로 판단.\n` +
+          `- 가로축 라벨: '/' 포함(예 05/21)=날짜, '/' 없는 숫자(예 10,11,12)=시간(시). 09:00 이전/15:30 이후 캔들은 NXT 연장거래.\n` +
+          `- 상단 가격대에 수평으로 일자로 붙어 마감하면 상한가 마감.\n` +
+          `이미지에서 실제로 보이는 것만 사용하고, 불확실하면 지어내지 말 것.`
+        : `[첨부 차트 이미지] 없음. 차트/B/S 기반 분석은 하지 말고 당일 카톡 텍스트만으로 분석할 것.`;
+      const content = [];
+      imgs.slice(0, 4).forEach(b64 => content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } }));
+      content.push({ type: "text", text:
+        `[현재 실전매매(강사 교본)]\n종목:${target.stock} 날짜:${target.date}\n당일 카톡 원문:\n${target.textContent}\n\n` +
+        `${chartNote}\n\n` +
+        `[강의록DB - 기본 지식. 이 매매에 가장 부합하는 기법을 근거로 활용]\n${techSummary || "(없음)"}\n\n` +
         `[과거 실전매매 참고]\n${pastText || "(없음)"}\n\n` +
-        `아래 항목을 분석:\n1. 매매 의도 및 전략\n2. 핵심 판단 근거\n3. 강의록 기법과의 연관성 (가장 부합하는 기법과 그 근거)\n4. 과거 유사 매매와 비교\n\n` +
+        `아래 항목을 분석 (반드시 [강의록DB]와 당일 카톡을 기본 지식으로 삼을 것):\n` +
+        `1. 매매 의도 및 전략 (당일 카톡 근거)\n` +
+        `2. 차트 B/S 분석: 첨부 차트의 B(매수)/S(매도)를 강의록 기법 기준으로 분석 — 진입/청산 타이밍이 기법의 트리거·패턴·주의사항과 부합하는지 강의록 근거를 인용. 정답매매(네모/동그라미)가 보이면 실제 B/S와 비교. 당일 카톡에서 강사가 밝힌 진입/청산 이유와 차트 B/S를 연결해 설명 (차트가 없으면 이 항목 생략)\n` +
+        `3. 강의록 기법과의 연관성 (가장 부합하는 기법 1개와 그 근거)\n` +
+        `4. 핵심 판단 근거 / 과거 유사 매매와 비교\n\n` +
         `※ 응답 맨 끝에 아래 두 줄을 순서대로, 다른 텍스트 없이 정확히 이 형식으로만 출력:\n` +
         `LECTURE:강의록ID  (이번 매매 상황에 가장 적합한 강의록 1개의 ID. 위 [강의록DB]의 [ID:...] 중에서 딱 하나만 고를 것. 적합한 것이 없으면 이 줄 생략)\n` +
-        `SIMILAR:[id1,id2,...]  (과거 유사 매매 중 가장 유사한 것 최대 5개의 ID)`,
-        8000, undefined, "claude-fable-5"
+        `SIMILAR:[id1,id2,...]  (과거 유사 매매 중 가장 유사한 것 최대 5개의 ID)`
+      });
+      const result = await claude(
+        "주식 실전매매 분석 전문가. 강사(교본)의 카카오톡 매매 메시지와 차트의 B/S를 강의록 기법에 근거해 분석한다. 강의록에 없는 내용을 일반론으로 단정하지 않고, 차트에서 실제로 보이는 것만 사용한다.",
+        content, 8000, undefined, "claude-fable-5"
       );
       const simMatch = result.match(/SIMILAR:\[([\d,\s]*)\]/);
       const lecMatch = result.match(/LECTURE:\s*(\d+)/);
