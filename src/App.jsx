@@ -43,7 +43,7 @@ const sbGetLiveImages = async (id) => {
   const r = await fetch(`${SB_URL}/rest/v1/live_trades?id=eq.${id}&select=images`, { headers: HDR });
   if (!r.ok) return [];
   const d = await r.json();
-  try { return JSON.parse(d[0]?.images || "[]"); } catch { return []; }
+  try { return normLiveImgs(JSON.parse(d[0]?.images || "[]")); } catch { return []; }
 };
 const sbPatchLive = async (id, data) => {
   const HDR2 = { ...HDR, Prefer: "return=minimal" };
@@ -106,10 +106,17 @@ const sbAddCorrection = async (original, corrected) => {
   if (!r.ok) throw new Error(await r.text());
 };
 
+// 실전매매 이미지: 하위호환 - 문자열(b64) 또는 {d:b64, s:종목태그} 모두 허용 → 항상 {d,s}로 정규화
+const normLiveImgs = (arr) => (arr || []).map(x => (typeof x === "string" ? { d: x, s: "" } : { d: x.d, s: x.s || "" }));
+// 종목 필드(콤마로 여러 개 가능) → 배열
+const stockList = (s) => (s || "").split(",").map(x => x.trim()).filter(Boolean);
+// 이미지의 유효 종목: 태그가 있으면 태그, 없고 종목이 1개뿐이면 그 종목(자동), 여러 개면 미지정
+const imgStock = (im, stocks) => im.s || (stocks.length === 1 ? stocks[0] : "");
+
 const liveTradeToRow = (t) => ({
   id: t.id, title: t.title || null, stock: t.stock, date: t.date,
   text_content: t.textContent,
-  images: JSON.stringify(t.images || []),
+  images: JSON.stringify(normLiveImgs(t.images)),
   ai_analysis: t.aiAnalysis || null,
   summary: t.summary || null,
   category: t.category || null,
@@ -119,7 +126,7 @@ const liveTradeToRow = (t) => ({
 const rowToLiveTrade = (r) => ({
   id: r.id, title: r.title || null, stock: r.stock, date: r.date,
   textContent: r.text_content,
-  images: (() => { try { return JSON.parse(r.images || "[]"); } catch { return []; } })(),
+  images: normLiveImgs((() => { try { return JSON.parse(r.images || "[]"); } catch { return []; } })()),
   aiAnalysis: r.ai_analysis,
   summary: r.summary || null,
   category: r.category || null,
@@ -1534,11 +1541,15 @@ function JournalTab({ techniques, onOpenLecture }) {
             liveImgIsSameStock = true;
             sameStockLiveNote = sameStock.map(t => `[교본: ${t.stock}${t.title ? " " + t.title : ""}]\n당일 카톡 원문: ${(t.textContent || "").slice(0, 1400)}`).join('\n---\n');
           }
-          // 목록 조회는 이미지를 제외하므로, 매칭된 실전매매의 이미지는 개별 지연 로딩
+          // 목록 조회는 이미지를 제외하므로, 매칭된 실전매매의 이미지는 개별 지연 로딩.
+          // 이미지별 종목 태그가 대상 종목과 일치하는 차트만 우선 사용(=자동/수동 매칭), 태그로 못 고르면 전체(AI 자동판독에 위임)
           const imgTargets = sameStock.length ? sameStock : liveMatches;
           for (const t of imgTargets) {
-            const imgs = await sbGetLiveImages(t.id);
-            imgs.slice(0, 2).forEach(b64 => liveImageBlocks.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } }));
+            const imgs = await sbGetLiveImages(t.id);           // [{d,s}]
+            const stocks = stockList(t.stock);
+            let picked = imgs.filter(im => imgStock(im, stocks) && matchStock(imgStock(im, stocks), selected.stock));
+            if (!picked.length) picked = imgs;                  // 매칭 실패/헷갈림 → 전체 첨부하고 AI가 종목명으로 판독
+            picked.slice(0, 3).forEach(im => liveImageBlocks.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: im.d } }));
           }
         }
       } catch {}
@@ -1573,7 +1584,7 @@ function JournalTab({ techniques, onOpenLecture }) {
         (selected.technique === "상따" ? "\n- [상따 기법 규칙] 전일 차트는 상한가로 마감한 것이다(가격제한폭 상단에 수평으로 붙어 마감한 형태). 상따는 정의상 '전일 상한가에서 매수'하는 기법이므로, 입력된 매수가 = 전일 상한가 진입가로 간주할 것. B 마커가 차트에 보이지 않아도 상한가 매수로 전제하고, 상한가 가격은 커서선/수평선이 아니라 입력된 매수가로 판단할 것. 차트에 '최저' 주석 가격이 매수가와 같거나 비슷하게 표시되더라도, 그것은 전일 상한가를 훼손하지 않은 일중 저점일 뿐이므로 입력 매수가를 '저점 선매수'나 '상따 원칙 위반'으로 재해석하지 말 것. 당일은 상한가 다음날로서 갭상승 또는 보합 출발하는 흐름을 중점 분석할 것. 당일 갭하락 출발인 경우는 '상따'가 아닌 '상한가하락시작' 기법에 해당하므로 혼동하지 말 것." : "") +
         (selected.technique?.startsWith("상한가하락시작") ? "\n- [상한가하락시작 기법 규칙] 전일 차트는 상한가로 마감한 것이다(가격제한폭 상단에 수평으로 붙어 마감한 형태로 확인 가능). 당일은 상한가 다음날이나 갭하락 또는 약세 출발하는 흐름이다. 전일 상한가 마감 후 당일 하락 출발 시점의 매매 맥락을 중점 분석할 것." : "");
       const imageNote = (selected.chartImg || liveImageBlocks.length)
-        ? `[첨부 이미지]${selected.chartImg ? `\n- (첫 번째 차트) 이 매매일지의 차트 이미지 = 내 매수(B)/매도(S) (캔들 모양, 진입/이탈 시간대 분석에 활용)${chartAxisNote}${chartMarkupNote}` : ""}${liveImageBlocks.length ? (liveImgIsSameStock ? `\n- (이후 ${liveImageBlocks.length}장) [교본 차트] '동일 날짜·동일 종목'의 교본(실전매매=강사 실제 매매) 차트다. 이 차트의 B(매수)/S(매도)는 강사의 실제 진입/청산이자 곧 정답매매(모범 답안)다 — 교본 차트엔 네모/동그라미(정답매매 표식)가 없고 강사 B/S 자체가 정답이다. 위 차트 판독 규칙 중 %주석·수평선·시간축 해석은 교본 차트에도 동일 적용하되, 내 매매일지 차트의 B/S와 교본 차트의 B/S(=정답)를 직접 비교하여 진입·청산 타이밍/가격 차이를 파악할 것.` : `\n- 동일 날짜 실전매매 관련 이미지 ${liveImageBlocks.length}장`) : ""}\n이미지에서 실제로 확인 가능한 내용만 사용하고, 기법 설명과 무관하거나 불확실한 내용은 언급하지 말 것.`
+        ? `[첨부 이미지]${selected.chartImg ? `\n- (첫 번째 차트) 이 매매일지의 차트 이미지 = 내 매수(B)/매도(S) (캔들 모양, 진입/이탈 시간대 분석에 활용)${chartAxisNote}${chartMarkupNote}` : ""}${liveImageBlocks.length ? (liveImgIsSameStock ? `\n- (이후 ${liveImageBlocks.length}장) [교본 차트] '동일 날짜·동일 종목'의 교본(실전매매=강사 실제 매매) 차트다. 이 차트의 B(매수)/S(매도)는 강사의 실제 진입/청산이자 곧 정답매매(모범 답안)다 — 교본 차트엔 네모/동그라미(정답매매 표식)가 없고 강사 B/S 자체가 정답이다. 위 차트 판독 규칙 중 %주석·수평선·시간축 해석은 교본 차트에도 동일 적용하되, 내 매매일지 차트의 B/S와 교본 차트의 B/S(=정답)를 직접 비교하여 진입·청산 타이밍/가격 차이를 파악할 것. 교본 차트가 여러 장이면 각 차트 상단(HTS/MTS)에 인쇄된 종목명을 읽어 '${selected.stock}' 차트만 비교 대상으로 삼고, 종목명이 다른 차트는 무시할 것(종목명이 안 보이면 캔들 흐름이 이 매매와 맞는 것만 사용).` : `\n- 동일 날짜 실전매매 관련 이미지 ${liveImageBlocks.length}장`) : ""}\n이미지에서 실제로 확인 가능한 내용만 사용하고, 기법 설명과 무관하거나 불확실한 내용은 언급하지 말 것.`
         : `[첨부 이미지] 없음. 차트 기반 분석(봉 모양, 시간대 등)은 시도하지 말고 '차트 없음'으로만 명시할 것. 추측해서 지어내지 말 것.`;
 
       const dayIdx = dayOfWeek(selected.date);
@@ -2688,10 +2699,11 @@ function JournalTab({ techniques, onOpenLecture }) {
 }
 
 // ==================== 이미지 그리드 (드래그 순서변경) ====================
-function ImgGrid({ images, onRemove, onReorder }) {
+function ImgGrid({ images, onRemove, onReorder, stockOpts, onTag }) {
   const [dragIdx, setDragIdx] = useState(null);
   const [dragOverIdx, setDragOverIdx] = useState(null);
   if (!images?.length) return null;
+  const showTag = Array.isArray(stockOpts) && stockOpts.length >= 2 && onTag;  // 종목 여러 개일 때만 이미지별 종목 선택 노출
 
   const handleDrop = (i) => {
     if (dragIdx === null || dragIdx === i) { setDragIdx(null); setDragOverIdx(null); return; }
@@ -2705,7 +2717,7 @@ function ImgGrid({ images, onRemove, onReorder }) {
 
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
-      {images.map((b64, i) => (
+      {images.map((img, i) => (
         <div key={i}
           draggable={!!onReorder}
           onDragStart={() => { setDragIdx(i); try { navigator.vibrate?.(10); } catch {}; }}
@@ -2714,13 +2726,21 @@ function ImgGrid({ images, onRemove, onReorder }) {
           onDrop={() => handleDrop(i)}
           onDragEnd={() => { setDragIdx(null); setDragOverIdx(null); }}
           style={{ position: "relative", opacity: dragIdx === i ? 0.4 : 1, outline: dragOverIdx === i && dragIdx !== i ? "2px solid #4f8ef7" : "none", borderRadius: 8, cursor: onReorder ? "grab" : "default", transition: "opacity 0.15s" }}>
-          <img src={`data:image/jpeg;base64,${b64}`} alt={`img${i}`}
-            style={{ width: 100, height: 80, objectFit: "cover", borderRadius: 6, border: "1px solid #2a2d3a", display: "block", pointerEvents: "none" }} />
+          <img src={`data:image/jpeg;base64,${img.d}`} alt={`img${i}`}
+            style={{ width: 100, height: showTag ? 80 : 80, objectFit: "cover", borderRadius: 6, border: "1px solid #2a2d3a", display: "block", pointerEvents: "none" }} />
           {onRemove && (
             <button onClick={() => onRemove(i)}
               style={{ position: "absolute", top: 2, right: 2, background: "#e74c3c", border: "none", color: "#fff", borderRadius: "50%", width: 18, height: 18, cursor: "pointer", fontSize: 10, padding: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
           )}
           {onReorder && <div style={{ position: "absolute", bottom: 2, left: 0, right: 0, textAlign: "center", fontSize: 11, color: "#555", pointerEvents: "none" }}>⠿</div>}
+          {showTag && (
+            <select value={img.s || ""} onChange={e => onTag(i, e.target.value)} onClick={e => e.stopPropagation()}
+              title="이 차트의 종목"
+              style={{ width: 100, marginTop: 3, background: img.s ? "#12301a" : "#2a1a1a", color: img.s ? "#8ee0a0" : "#e0a0a0", border: "1px solid #2a2d3a", borderRadius: 4, fontSize: 10, padding: "2px 3px", boxSizing: "border-box" }}>
+              <option value="">종목?</option>
+              {stockOpts.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          )}
         </div>
       ))}
     </div>
@@ -2860,8 +2880,9 @@ function RealTradeTab({ techniques = [], onOpenLecture }) {
   const handleAddImage = async (file, target) => {
     try {
       const b64 = await compressImage(file);
-      if (target === "form") setForm(f => ({ ...f, images: [...f.images, b64] }));
-      else setEditForm(f => ({ ...f, images: [...(f.images || []), b64] }));
+      const img = { d: b64, s: "" };
+      if (target === "form") setForm(f => ({ ...f, images: [...f.images, img] }));
+      else setEditForm(f => ({ ...f, images: [...(f.images || []), img] }));
     } catch (e) { setFeedback(`❌ 이미지 오류: ${e.message}`); }
   };
 
@@ -2952,10 +2973,11 @@ function RealTradeTab({ techniques = [], onOpenLecture }) {
           `- 차트의 %주석·수평선·'최고/최저' 옆 가격은 손익이나 매매가가 아니다(HTS 자동표시). 진입/청산가는 B/S 마커 위치로 판단.\n` +
           `- 가로축 라벨: '/' 포함(예 05/21)=날짜, '/' 없는 숫자(예 10,11,12)=시간(시). 09:00 이전/15:30 이후 캔들은 NXT 연장거래.\n` +
           `- 상단 가격대에 수평으로 일자로 붙어 마감하면 상한가 마감.\n` +
+          `- 각 차트의 종목: ${(() => { const stocks = stockList(target.stock); return imgs.slice(0, 4).map((im, i) => `차트${i + 1}=${imgStock(im, stocks) || "미지정(차트 상단 인쇄 종목명으로 판단)"}`).join(" / "); })()}. 종목이 여러 개면 종목별로 구분해 B/S를 분석하고, 미지정 차트는 상단(HTS/MTS)에 인쇄된 종목명으로 식별할 것.\n` +
           `이미지에서 실제로 보이는 것만 사용하고, 불확실하면 지어내지 말 것.`
         : `[첨부 차트 이미지] 없음. 차트/B/S 기반 분석은 하지 말고 당일 카톡 텍스트만으로 분석할 것.`;
       const content = [];
-      imgs.slice(0, 4).forEach(b64 => content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } }));
+      imgs.slice(0, 4).forEach(im => content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: im.d } }));
       content.push({ type: "text", text:
         `[현재 실전매매(강사 교본)]\n종목:${target.stock} 날짜:${target.date}\n당일 카톡 원문:\n${target.textContent}\n\n` +
         `${chartNote}\n\n` +
@@ -3103,7 +3125,9 @@ function RealTradeTab({ techniques = [], onOpenLecture }) {
             </div>
             <ImgGrid images={form.images}
               onRemove={i => setForm(f => ({ ...f, images: f.images.filter((_, j) => j !== i) }))}
-              onReorder={arr => setForm(f => ({ ...f, images: arr }))} />
+              onReorder={arr => setForm(f => ({ ...f, images: arr }))}
+              stockOpts={stockList(form.stock)}
+              onTag={(i, s) => setForm(f => ({ ...f, images: f.images.map((im, j) => j === i ? { ...im, s } : im) }))} />
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <button onClick={handleSave} style={{ padding: "8px 20px", background: "#e74c3c", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>저장</button>
@@ -3233,7 +3257,7 @@ function RealTradeTab({ techniques = [], onOpenLecture }) {
                   <div style={{ position: "relative", background: "#0f1117", borderRadius: 8, overflow: "hidden", height: 500, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 14 }}>
                     <img
                       key={imgIdx}
-                      src={`data:image/jpeg;base64,${selected.images[Math.min(imgIdx, selected.images.length - 1)]}`}
+                      src={`data:image/jpeg;base64,${selected.images[Math.min(imgIdx, selected.images.length - 1)]?.d}`}
                       alt="chart"
                       onLoad={e => {
                         const { naturalWidth: w, naturalHeight: h } = e.target;
@@ -3241,6 +3265,9 @@ function RealTradeTab({ techniques = [], onOpenLecture }) {
                       }}
                       style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", transform: imgScale > 1 ? `scale(${imgScale})` : "none", transition: "transform 0.2s" }}
                     />
+                    {(() => { const tag = selected.images[Math.min(imgIdx, selected.images.length - 1)]?.s; return tag ? (
+                      <span style={{ position: "absolute", top: 8, left: 8, background: "rgba(18,48,26,0.85)", color: "#8ee0a0", border: "1px solid #2e7d32", borderRadius: 4, fontSize: 11, padding: "2px 8px" }}>📌 {tag}</span>
+                    ) : null; })()}
                     {selected.images.length > 1 && (
                       <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "rgba(0,0,0,0.6)" }}>
                         <button onClick={() => { setImgIdx(p => Math.max(0, p - 1)); setImgScale(1); }} disabled={imgIdx === 0}
@@ -3432,7 +3459,9 @@ function RealTradeTab({ techniques = [], onOpenLecture }) {
                   </div>
                   <ImgGrid images={editForm.images}
                     onRemove={i => setEditForm(f => ({ ...f, images: f.images.filter((_, j) => j !== i) }))}
-                    onReorder={arr => setEditForm(f => ({ ...f, images: arr }))} />
+                    onReorder={arr => setEditForm(f => ({ ...f, images: arr }))}
+                    stockOpts={stockList(editForm.stock)}
+                    onTag={(i, s) => setEditForm(f => ({ ...f, images: f.images.map((im, j) => j === i ? { ...im, s } : im) }))} />
                 </div>
                 <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                   <button onClick={handleEditSave} style={{ padding: "8px 20px", background: "#e74c3c", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>저장</button>
