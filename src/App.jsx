@@ -105,6 +105,23 @@ const sbAddCorrection = async (original, corrected) => {
   });
   if (!r.ok) throw new Error(await r.text());
 };
+// 월간복기 리포트 클라우드 저장(monthly_reviews: month PK) - 테이블 미생성 시 조회 null/저장 예외
+const sbGetReview = async (month) => {
+  try {
+    const r = await fetch(`${SB_URL}/rest/v1/monthly_reviews?month=eq.${month}&select=content,created_at&limit=1`, { headers: HDR });
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d[0] ? { content: d[0].content, at: d[0].created_at } : null;
+  } catch { return null; }
+};
+const sbSaveReview = async (month, content) => {
+  const r = await fetch(`${SB_URL}/rest/v1/monthly_reviews`, {
+    method: "POST",
+    headers: { ...HDR, Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify({ month, content, created_at: new Date().toISOString() }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+};
 
 // 실전매매 이미지: 하위호환 - 문자열(b64) 또는 {d:b64, s:종목태그} 모두 허용 → 항상 {d,s}로 정규화
 const normLiveImgs = (arr) => (arr || []).map(x => (typeof x === "string" ? { d: x, s: "" } : { d: x.d, s: x.s || "" }));
@@ -123,7 +140,7 @@ const matchStockName = (a, b) => {
 // 월간복기 리포트 localStorage 저장(월별, 새로고침 유지)
 const reviewKey = (m) => `monthly_review_${m}`;
 const loadReview = (m) => { try { return JSON.parse(localStorage.getItem(reviewKey(m)) || "null"); } catch { return null; } };
-const saveReview = (m, content) => { try { localStorage.setItem(reviewKey(m), JSON.stringify({ content, at: new Date().toISOString() })); } catch {} };
+const saveReview = (m, content, at) => { try { localStorage.setItem(reviewKey(m), JSON.stringify({ content, at: at || new Date().toISOString() })); } catch {} };
 
 const liveTradeToRow = (t) => ({
   id: t.id, title: t.title || null, stock: t.stock, date: t.date,
@@ -3664,7 +3681,16 @@ function MonthlyReviewTab({ techniques = [] }) {
       .catch(e => { setFeedback(`❌ 로드 실패: ${e.message}`); setLoading(false); });
   }, []);
 
-  useEffect(() => { setSaved(loadReview(month)); setFeedback(""); }, [month]);
+  useEffect(() => {
+    let alive = true;
+    setFeedback(""); setSaved(loadReview(month));   // 우선 로컬 캐시 즉시 표시
+    (async () => {
+      const cloud = await sbGetReview(month);        // 클라우드가 있으면 최신본으로 대체 + 로컬 캐시 갱신
+      if (!alive || !cloud) return;
+      setSaved(cloud); saveReview(month, cloud.content, cloud.at);
+    })();
+    return () => { alive = false; };
+  }, [month]);
 
   const shiftMonth = (delta) => {
     const [y, m] = month.split("-").map(Number);
@@ -3730,7 +3756,9 @@ function MonthlyReviewTab({ techniques = [] }) {
         "주식 단기매매 복기 코치. 한 달치 매매 데이터를 종합해 구체적이고 실행가능한 개선점을 도출한다. 반드시 제공된 실제 매매/강사 데이터에 근거하고, 날짜·종목을 인용하며, 근거 없는 일반론을 쓰지 않는다.",
         prompt, 8000, undefined, "claude-fable-5");
       const rec = { content: result.trim(), at: new Date().toISOString() };
-      saveReview(month, rec); setSaved(rec);
+      saveReview(month, rec.content, rec.at); setSaved(rec);
+      try { await sbSaveReview(month, rec.content); }   // 클라우드 동기화(기기 간 공유)
+      catch { setFeedback("⚠️ 클라우드 저장 실패(로컬엔 저장됨). monthly_reviews 테이블 생성 SQL을 실행해 주세요."); }
     } catch (e) { setFeedback(`❌ ${e.message}`); }
     setGenerating(false);
   };
