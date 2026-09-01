@@ -3,7 +3,7 @@ import JSZip from "jszip";
 import * as XLSX from "xlsx";
 
 // ==================== 상수 / 설정 ====================
-const TABS = ["🏠 대시보드", "📝 매매일지", "📊 통계", "📚 강의록", "🔴 실전매매"];
+const TABS = ["🏠 대시보드", "📝 매매일지", "📊 통계", "📚 강의록", "🔴 실전매매", "📅 월간복기"];
 const SB_URL = "https://vbdtrynddjryxcpgpisf.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZiZHRyeW5kZGpyeXhjcGdwaXNmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0MDI0MDEsImV4cCI6MjA5NTk3ODQwMX0.p3Bs8i-sNz6GodYIXLg1BzdrTxAc9-jB2dZRaOKCW3M";
 const HDR = { "Content-Type": "application/json", "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Prefer": "resolution=merge-duplicates" };
@@ -112,6 +112,18 @@ const normLiveImgs = (arr) => (arr || []).map(x => (typeof x === "string" ? { d:
 const stockList = (s) => (s || "").split(",").map(x => x.trim()).filter(Boolean);
 // 이미지의 유효 종목: 태그가 있으면 태그, 없고 종목이 1개뿐이면 그 종목(자동), 여러 개면 미지정
 const imgStock = (im, stocks) => im.s || (stocks.length === 1 ? stocks[0] : "");
+// 종목명 매칭(공백/별표 무시, 우선주는 정확일치). 월간복기 등 모듈 전역에서 사용
+const matchStockName = (a, b) => {
+  if (!a || !b) return false;
+  const n = s => s.replace(/\s+/g, "").replace(/^\*/, "").toLowerCase();
+  const isPref = s => /우[A-Z]?$/.test(s.replace(/\s+/g, ""));
+  if (isPref(a) || isPref(b)) return n(a) === n(b);
+  return n(a) === n(b) || n(a).includes(n(b)) || n(b).includes(n(a));
+};
+// 월간복기 리포트 localStorage 저장(월별, 새로고침 유지)
+const reviewKey = (m) => `monthly_review_${m}`;
+const loadReview = (m) => { try { return JSON.parse(localStorage.getItem(reviewKey(m)) || "null"); } catch { return null; } };
+const saveReview = (m, content) => { try { localStorage.setItem(reviewKey(m), JSON.stringify({ content, at: new Date().toISOString() })); } catch {} };
 
 const liveTradeToRow = (t) => ({
   id: t.id, title: t.title || null, stock: t.stock, date: t.date,
@@ -3635,6 +3647,162 @@ function StatsTab() {
 }
 
 // ==================== 메인 앱 ====================
+// ==================== 월간 복기 탭 ====================
+function MonthlyReviewTab({ techniques = [] }) {
+  const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7)); // YYYY-MM
+  const [trades, setTrades] = useState([]);
+  const [lives, setLives] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [generating, setGenerating] = useState(false);
+  const [saved, setSaved] = useState(null);   // { content, at }
+  const [feedback, setFeedback] = useState("");
+  const isMobile = useIsMobile();
+
+  useEffect(() => {
+    Promise.all([sbGetTrades(), sbGetLiveTrades()])
+      .then(([tr, lv]) => { setTrades(tr.map(rowToTrade)); setLives(lv.map(rowToLiveTrade)); setLoading(false); })
+      .catch(e => { setFeedback(`❌ 로드 실패: ${e.message}`); setLoading(false); });
+  }, []);
+
+  useEffect(() => { setSaved(loadReview(month)); setFeedback(""); }, [month]);
+
+  const shiftMonth = (delta) => {
+    const [y, m] = month.split("-").map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  };
+
+  // 이번 달 데이터 + 계산
+  const monthTrades = trades.filter(t => (t.date || "").startsWith(month) && !t.deletedAt);
+  const monthLives = lives.filter(t => (t.date || "").startsWith(month) && !t.deletedAt && t.category !== "강의");
+  const scored = monthTrades.filter(t => t.pnlRate !== "" && t.pnlRate != null);
+  const wins = scored.filter(t => parseFloat(t.pnlRate) > 0).length;
+  const totalPnl = monthTrades.reduce((s, t) => s + (parseFloat(t.pnl) || 0), 0);
+  const analyzedN = monthTrades.filter(t => t.aiAnalysis).length;
+
+  // 강사(교본)가 매매했으나 내 매매일지에 없는 종목 = 놓친 매매 (날짜+종목 기준, 중복 제거)
+  const missed = (() => {
+    const seen = new Set(); const out = [];
+    monthLives.forEach(L => stockList(L.stock).forEach(s => {
+      const key = `${L.date}|${s}`;
+      if (seen.has(key)) return; seen.add(key);
+      if (!monthTrades.some(t => t.date === L.date && matchStockName(t.stock, s)))
+        out.push({ date: L.date, stock: s, title: L.title, text: L.textContent });
+    }));
+    return out.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  })();
+
+  const generate = async () => {
+    if (!monthTrades.length && !monthLives.length) { setFeedback("❌ 이번 달 데이터가 없습니다."); return; }
+    setGenerating(true); setFeedback("");
+    try {
+      // 기법별 요약
+      const byTech = {};
+      scored.forEach(t => { const k = t.technique || "미분류"; (byTech[k] = byTech[k] || { n: 0, w: 0, pnl: 0 }); byTech[k].n++; if (parseFloat(t.pnlRate) > 0) byTech[k].w++; byTech[k].pnl += parseFloat(t.pnl) || 0; });
+      const techLine = Object.entries(byTech).sort((a, b) => b[1].pnl - a[1].pnl)
+        .map(([k, v]) => `${k}: ${v.n}건 승률${Math.round(v.w / v.n * 100)}% 손익${v.pnl.toLocaleString()}`).join(" / ") || "(없음)";
+      // 매매별 AI 분석 요약(이미 저장된 분석 재활용 → 개별 재분석 비용 없음)
+      const digests = monthTrades
+        .sort((a, b) => (a.date || "").localeCompare(b.date || ""))
+        .map(t => {
+          const a = stripLec(t.aiAnalysis || "");
+          return `[${t.date} ${t.stock} ${t.technique || "-"} 수익률${t.pnlRate}%]${t.reason ? ` 이유:${t.reason.slice(0, 120)}` : ""}${a ? `\n▶분석요약: ${a.slice(0, 650)}` : " (AI분석 없음 — 아직 미분석)"}`;
+        }).join("\n\n");
+      const missedTxt = missed.length
+        ? missed.map(m => `- ${m.date} ${m.stock}${m.title ? ` (${m.title})` : ""}: ${(m.text || "").replace(/\s+/g, " ").slice(0, 220)}`).join("\n")
+        : "(놓친 매매 없음 — 강사가 매매한 종목은 모두 대응함)";
+      const techNames = techniques.map((t, i) => `${i + 1}강 ${t.name}`).join(", ");
+
+      const prompt =
+        `[이번 달: ${month}] 총 매매 ${monthTrades.length}건(채점가능 ${scored.length}건), 승률 ${scored.length ? Math.round(wins / scored.length * 100) : 0}%, 총손익 ${totalPnl.toLocaleString()}원(괄호숫자=만원)\n` +
+        `[기법별] ${techLine}\n\n` +
+        `[매매별 AI 분석 요약 — 각 매매의 정답매매/개선점이 이미 담겨 있음. 이걸 근거로 공통 패턴을 뽑을 것]\n${digests || "(매매 없음)"}\n\n` +
+        `[강사(교본)는 매매했으나 내가 놓친 종목 — 강사 당일 카톡 발췌]\n${missedTxt}\n\n` +
+        `[강의록 목록]\n${techNames || "(없음)"}\n\n` +
+        `위 데이터로 한 달 매매를 종합 복기하라. 반드시 실제 매매 날짜·종목을 구체적으로 인용하고, 일반론은 금지. 마크다운으로 아래 순서:\n` +
+        `## 1. 한 달 총평 (수치·기법 편중·전반 경향)\n` +
+        `## 2. 반복된 미흡·실수 패턴 (개별 매매 인용, 왜 반복되는지)\n` +
+        `## 3. 정답매매 vs 실제매매 — 공통적으로 벌어진 갭 (진입/청산 타이밍·손절·물량 등 어디서 어긋났는지)\n` +
+        `## 4. 놓친 매매 (강사 대비) — 놓친 종목별로 왜 놓쳤을지 추정 + 다음에 잡으려면 무엇을 봐야 하는지\n` +
+        `## 5. 다음 달 개선 액션 (3~5개, 바로 실행 가능한 체크리스트로)`;
+
+      const result = await claude(
+        "주식 단기매매 복기 코치. 한 달치 매매 데이터를 종합해 구체적이고 실행가능한 개선점을 도출한다. 반드시 제공된 실제 매매/강사 데이터에 근거하고, 날짜·종목을 인용하며, 근거 없는 일반론을 쓰지 않는다.",
+        prompt, 8000, undefined, "claude-fable-5");
+      const rec = { content: result.trim(), at: new Date().toISOString() };
+      saveReview(month, rec); setSaved(rec);
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+    setGenerating(false);
+  };
+
+  const btn = (extra) => ({ padding: "6px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, ...extra });
+
+  return (
+    <div style={{ color: "#e0e0e0" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+        <button onClick={() => shiftMonth(-1)} style={btn({ background: "#2a2d3a", color: "#aaa" })}>◀</button>
+        <input type="month" value={month} onChange={e => e.target.value && setMonth(e.target.value)}
+          style={{ background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "6px 10px", fontSize: 14, colorScheme: "dark" }} />
+        <button onClick={() => shiftMonth(1)} style={btn({ background: "#2a2d3a", color: "#aaa" })}>▶</button>
+        <button onClick={generate} disabled={generating || loading}
+          style={btn({ background: generating ? "#333" : "#8e44ad", color: "#fff", marginLeft: "auto" })}>
+          {generating ? "복기 생성 중… (수십 초)" : saved ? "🔄 다시 복기" : "🧠 월간 복기 생성"}
+        </button>
+      </div>
+
+      {loading ? <div style={{ color: "#555", padding: 40, textAlign: "center" }}>로딩 중...</div> : (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2,1fr)" : "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
+            {[["내 매매", `${monthTrades.length}건`, "#ddd"], ["AI분석 완료", `${analyzedN}/${monthTrades.length}`, analyzedN === monthTrades.length ? "#4caf50" : "#f39c12"],
+              ["강사 실전매매", `${monthLives.length}건`, "#4f8ef7"], ["놓친 매매", `${missed.length}건`, missed.length ? "#e74c3c" : "#4caf50"]
+            ].map(([l, v, c]) => (
+              <div key={l} style={{ ...box, textAlign: "center" }}>
+                <div style={{ fontSize: 11, color: "#555", marginBottom: 4 }}>{l}</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: c }}>{v}</div>
+              </div>
+            ))}
+          </div>
+
+          {analyzedN < monthTrades.length && monthTrades.length > 0 && (
+            <div style={{ fontSize: 12, color: "#f39c12", marginBottom: 12 }}>
+              💡 이번 달 매매 중 {monthTrades.length - analyzedN}건은 아직 AI 분석 전입니다. 매매일지에서 각 매매를 분석해두면 복기 품질이 올라갑니다.
+            </div>
+          )}
+
+          {missed.length > 0 && (
+            <div style={{ ...box, marginBottom: 14 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, color: "#e74c3c" }}>🎯 강사는 매매했는데 내가 놓친 종목 ({missed.length})</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {missed.map((m, i) => (
+                  <span key={i} style={{ background: "#2a1a1a", border: "1px solid #5a2d2d", borderRadius: 20, padding: "3px 11px", fontSize: 12, color: "#e0a0a0" }}>
+                    {m.date?.slice(5)} {m.stock}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {feedback && <div style={{ marginBottom: 12, fontSize: 13, color: feedback.startsWith("✅") ? "#4caf50" : "#e74c3c" }}>{feedback}</div>}
+
+          {saved ? (
+            <div style={{ ...box }}>
+              <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: "#8e44ad" }}>🧠 {month} 월간 복기</span>
+                <span style={{ marginLeft: "auto", fontSize: 11, color: "#555" }}>생성 {new Date(saved.at).toLocaleString("ko-KR")}</span>
+              </div>
+              <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad", whiteSpace: "normal", lineHeight: 1.7 }}><MD text={saved.content} /></div>
+            </div>
+          ) : !generating && (
+            <div style={{ color: "#555", padding: 30, textAlign: "center", ...box }}>
+              위 <b>월간 복기 생성</b>을 누르면 이번 달 매매·강사 실전매매·놓친 매매를 종합해 개선점을 정리합니다.
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState(0);
   const [techniques, setTechniques] = useState([]);
@@ -3700,6 +3868,7 @@ export default function App() {
         {activeTab === 2 && <StatsTab />}
         {activeTab === 3 && <LectureTab pendingLecture={pendingLecture} onConsumed={() => setPendingLecture(null)} />}
         {activeTab === 4 && <RealTradeTab techniques={techniques} onOpenLecture={openLecture} />}
+        {activeTab === 5 && <MonthlyReviewTab techniques={techniques} />}
       </div>
       {showScrollTop && (
         <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
