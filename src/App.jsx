@@ -556,11 +556,17 @@ const label11 = { fontSize: 11, color: "#555", marginBottom: 3, textAlign: "left
 const val14 = { fontSize: 14, color: "#ddd", background: "#13151f", padding: "8px 10px", borderRadius: 6, whiteSpace: "pre-wrap", lineHeight: 1.6, textAlign: "left" };
 
 // AI 분석 텍스트(마크다운)를 간단히 렌더링 - **볼드**, ## 헤더, - 불릿, 줄바꿈 처리
-const MD = ({ text }) => {
+const MD = ({ text, onTradeLink }) => {
   if (!text) return null;
-  const inline = (s) => String(s).split(/(\*\*[^*]+\*\*)/g).map((p, i) => {
-    const m = p.match(/^\*\*([\s\S]+)\*\*$/);
-    return m ? <strong key={i} style={{ color: "#fff" }}>{m[1]}</strong> : <span key={i}>{p}</span>;
+  // **볼드** 와 [라벨](t:ID) 매매 링크 처리
+  const inline = (s) => String(s).split(/(\*\*[^*]+\*\*|\[[^\]]+\]\(t:\d+\))/g).map((p, i) => {
+    const b = p.match(/^\*\*([\s\S]+)\*\*$/);
+    if (b) return <strong key={i} style={{ color: "#fff" }}>{b[1]}</strong>;
+    const lk = p.match(/^\[([^\]]+)\]\(t:(\d+)\)$/);
+    if (lk) return onTradeLink
+      ? <a key={i} onClick={e => { e.preventDefault(); onTradeLink(parseInt(lk[2])); }} style={{ color: "#4f8ef7", cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2 }}>{lk[1]}</a>
+      : <span key={i}>{lk[1]}</span>;
+    return <span key={i}>{p}</span>;
   });
   return <>{String(text).split("\n").map((ln, i) => {
     const h = ln.match(/^(#{1,4})\s+(.*)$/);
@@ -1059,7 +1065,7 @@ const parseLec = (s) => { const m = s && s.match(LEC_RE); return m ? parseInt(m[
 const withLec = (text, id) => (id ? `${text}\n<!--LEC:${id}-->` : text);
 
 // ==================== 매매일지 탭 ====================
-function JournalTab({ techniques, onOpenLecture }) {
+function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeConsumed }) {
   const [trades, setTrades] = useState([]);
   const [recLectureId, setRecLectureId] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1169,6 +1175,16 @@ function JournalTab({ techniques, onOpenLecture }) {
     setDetailImgLoading(false);
   };
   useEffect(() => { load(); }, [load]);
+
+  // 다른 탭(월간복기 리포트의 예시 링크 등)에서 특정 매매로 이동 요청 → 로드 후 상세 열기
+  useEffect(() => {
+    if (pendingTradeId == null || loading) return;
+    const t = trades.find(x => String(x.id) === String(pendingTradeId));
+    if (t) openDetail(t);
+    else setFeedback("❌ 해당 매매를 찾을 수 없음(삭제되었을 수 있음)");
+    onPendingTradeConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingTradeId, loading, trades]);
 
   // 브라우저 뒤로가기/앞으로가기 처리
   useEffect(() => {
@@ -3673,7 +3689,7 @@ function StatsTab() {
 
 // ==================== 메인 앱 ====================
 // ==================== 월간 복기 탭 ====================
-function MonthlyReviewTab({ techniques = [] }) {
+function MonthlyReviewTab({ techniques = [], onOpenTrade }) {
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7)); // YYYY-MM
   const [trades, setTrades] = useState([]);
   const [lives, setLives] = useState([]);
@@ -3748,8 +3764,8 @@ function MonthlyReviewTab({ techniques = [] }) {
           const obs = isObserveTrade(t);
           const teacherIn = stockList(t.stock).some(s => liveStockDay.has(`${t.date}|${s}`));
           const head = obs
-            ? `[${t.date} ${t.stock} ${t.technique || "-"} 관망(미진입)${teacherIn ? " ※강사는 이날 이 종목 진입함" : ""}]`
-            : `[${t.date} ${t.stock} ${t.technique || "-"} 수익률${t.pnlRate}%]`;
+            ? `[id:${t.id} | ${t.date} ${t.stock} ${t.technique || "-"} 관망(미진입)${teacherIn ? " ※강사는 이날 이 종목 진입함" : ""}]`
+            : `[id:${t.id} | ${t.date} ${t.stock} ${t.technique || "-"} 수익률${t.pnlRate}%]`;
           return `${head}${t.reason ? ` 이유:${t.reason.slice(0, 120)}` : ""}${a ? `\n▶분석요약: ${a.slice(0, 650)}` : " (AI분석 없음 — 아직 미분석)"}`;
         }).join("\n\n");
       const missedTxt = missed.length
@@ -3764,7 +3780,9 @@ function MonthlyReviewTab({ techniques = [] }) {
         `[매매·관망별 AI 분석 요약 — 각 항목의 정답매매/개선점이 이미 담겨 있음. 이걸 근거로 공통 패턴을 뽑을 것]\n${digests || "(기록 없음)"}\n\n` +
         `[강사(교본)는 매매했으나 내가 기록조차 없는 종목 — 강사 당일 카톡 발췌]\n${missedTxt}\n\n` +
         `[강의록 목록]\n${techNames || "(없음)"}\n\n` +
-        `위 데이터로 한 달 매매를 종합 복기하라. 반드시 실제 매매 날짜·종목을 구체적으로 인용하고, 일반론은 금지. 마크다운으로 아래 순서:\n` +
+        `위 데이터로 한 달 매매를 종합 복기하라. 반드시 실제 매매 날짜·종목을 구체적으로 인용하고, 일반론은 금지.\n` +
+        `[매매 인용 규칙] 특정 매매/관망을 예시로 콕 집어 언급할 때는 그 종목명을 반드시 \`[YYYY-MM-DD 종목명](t:ID)\` 형식의 링크로 표기(ID는 위 각 항목 맨앞 id 값). 예: [2026-05-14 코스모로보틱스](t:123). 링크는 예시로 지목하는 첫 언급에만 쓰고 남발하지 말 것. 강사만 매매한(내 id가 없는) 종목은 링크 없이 종목명만 쓸 것.\n` +
+        `마크다운으로 아래 순서:\n` +
         `## 1. 한 달 총평 (수치·기법 편중·실행 vs 관망 비중·전반 경향)\n` +
         `## 2. 반복된 미흡·실수 패턴 (개별 매매 인용, 왜 반복되는지. 진입했어야 할 자리를 관망했거나 관망했어야 할 자리에 진입한 '의사결정 실수'도 포함)\n` +
         `## 3. 정답매매 vs 실제매매 — 공통적으로 벌어진 갭 (진입/청산 타이밍·손절·물량 등 어디서 어긋났는지)\n` +
@@ -3839,7 +3857,7 @@ function MonthlyReviewTab({ techniques = [] }) {
                 <span style={{ fontSize: 13, fontWeight: 600, color: "#8e44ad" }}>🧠 {month} 월간 복기</span>
                 <span style={{ marginLeft: "auto", fontSize: 11, color: "#555" }}>생성 {new Date(saved.at).toLocaleString("ko-KR")}</span>
               </div>
-              <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad", whiteSpace: "normal", lineHeight: 1.7 }}><MD text={saved.content} /></div>
+              <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad", whiteSpace: "normal", lineHeight: 1.7 }}><MD text={saved.content} onTradeLink={onOpenTrade} /></div>
             </div>
           ) : !generating && (
             <div style={{ color: "#555", padding: 30, textAlign: "center", ...box }}>
@@ -3856,6 +3874,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState(0);
   const [techniques, setTechniques] = useState([]);
   const [pendingLecture, setPendingLecture] = useState(null);
+  const [pendingTradeId, setPendingTradeId] = useState(null);
   const [showScrollTop, setShowScrollTop] = useState(false);
   const isMobile = useIsMobile();
 
@@ -3864,6 +3883,13 @@ export default function App() {
     window.history.pushState({ appTab: 3 }, "");
     setActiveTab(3);
     setPendingLecture(id);
+  };
+
+  // 매매일지의 특정 매매로 크로스탭 이동 (월간복기 리포트의 예시 링크 등)
+  const openTrade = (id) => {
+    window.history.pushState({ appTab: 1 }, "");
+    setActiveTab(1);
+    setPendingTradeId(id);
   };
 
   useEffect(() => {
@@ -3913,11 +3939,11 @@ export default function App() {
       </div>
       <div style={{ padding: isMobile ? 12 : 20, maxWidth: 960, margin: "0 auto" }}>
         {activeTab === 0 && <DashboardTab onNavigate={handleTabChange} />}
-        {activeTab === 1 && <JournalTab techniques={techniques} onOpenLecture={openLecture} />}
+        {activeTab === 1 && <JournalTab techniques={techniques} onOpenLecture={openLecture} pendingTradeId={pendingTradeId} onPendingTradeConsumed={() => setPendingTradeId(null)} />}
         {activeTab === 2 && <StatsTab />}
         {activeTab === 3 && <LectureTab pendingLecture={pendingLecture} onConsumed={() => setPendingLecture(null)} />}
         {activeTab === 4 && <RealTradeTab techniques={techniques} onOpenLecture={openLecture} />}
-        {activeTab === 5 && <MonthlyReviewTab techniques={techniques} />}
+        {activeTab === 5 && <MonthlyReviewTab techniques={techniques} onOpenTrade={openTrade} />}
       </div>
       {showScrollTop && (
         <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
