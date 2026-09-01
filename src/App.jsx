@@ -3690,7 +3690,12 @@ function StatsTab() {
 // ==================== 메인 앱 ====================
 // ==================== 월간 복기 탭 ====================
 function MonthlyReviewTab({ techniques = [], onOpenTrade }) {
-  const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7)); // YYYY-MM
+  // 매매로 이동했다가 뒤로가기로 복귀하는 경우(reviewReturnScroll 플래그 존재)엔 보던 월을 그대로 복원, 그 외엔 이번 달
+  const [month, setMonth] = useState(() => {
+    try { if (sessionStorage.getItem("reviewReturnScroll") != null) return sessionStorage.getItem("reviewMonth") || new Date().toISOString().slice(0, 7); } catch {}
+    return new Date().toISOString().slice(0, 7);
+  }); // YYYY-MM
+  useEffect(() => { try { sessionStorage.setItem("reviewMonth", month); } catch {} }, [month]);
   const [trades, setTrades] = useState([]);
   const [lives, setLives] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -3715,6 +3720,19 @@ function MonthlyReviewTab({ techniques = [], onOpenTrade }) {
     })();
     return () => { alive = false; };
   }, [month]);
+
+  // 매매로 이동했다가 뒤로가기로 돌아온 경우, 리포트가 렌더된 뒤(=loading 종료) 저장해둔 스크롤 위치 복원
+  useEffect(() => {
+    if (loading) return;
+    let v;
+    try { v = sessionStorage.getItem("reviewReturnScroll"); } catch {}
+    if (v == null) return;
+    try { sessionStorage.removeItem("reviewReturnScroll"); } catch {}
+    const y = parseInt(v) || 0;
+    const r1 = requestAnimationFrame(() => requestAnimationFrame(() => window.scrollTo(0, y)));
+    const tid = setTimeout(() => window.scrollTo(0, y), 150);   // 레이아웃 지연 대비 폴백
+    return () => { cancelAnimationFrame(r1); clearTimeout(tid); };
+  }, [loading]);
 
   const shiftMonth = (delta) => {
     const [y, m] = month.split("-").map(Number);
@@ -3885,9 +3903,11 @@ export default function App() {
     setPendingLecture(id);
   };
 
-  // 매매일지의 특정 매매로 크로스탭 이동 (월간복기 리포트의 예시 링크 등)
+  // 매매일지의 특정 매매로 크로스탭 이동 (월간복기 리포트의 예시 링크 등).
+  // 별도 히스토리 항목을 push하지 않음 → 이후 openDetail이 push하는 항목이 복기 탭(appTab)을 상속하므로
+  // 뒤로가기 '한 번'에 복기 탭으로 복귀. 복귀 시 스크롤 복원을 위해 현재 스크롤 위치를 저장.
   const openTrade = (id) => {
-    window.history.pushState({ appTab: 1 }, "");
+    try { sessionStorage.setItem("reviewReturnScroll", String(window.scrollY)); } catch {}
     setActiveTab(1);
     setPendingTradeId(id);
   };
