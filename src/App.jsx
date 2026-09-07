@@ -3750,17 +3750,28 @@ function MonthlyReviewTab({ techniques = [], onOpenTrade }) {
   const observeN = monthTrades.filter(isObserveTrade).length;       // 관망(미진입)
   const executedN = monthTrades.length - observeN;                  // 실제 진입 매매
 
-  // 강사(교본)가 매매했으나 내 매매일지에 없는 종목 = 놓친 매매 (날짜+종목 기준, 중복 제거)
-  const missed = (() => {
+  // 강사 진입 (날짜|종목) 목록(중복 제거, 원본 실전매매 참조 유지)
+  const teacherPairs = (() => {
     const seen = new Set(); const out = [];
     monthLives.forEach(L => stockList(L.stock).forEach(s => {
       const key = `${L.date}|${s}`;
       if (seen.has(key)) return; seen.add(key);
-      if (!monthTrades.some(t => t.date === L.date && matchStockName(t.stock, s)))
-        out.push({ date: L.date, stock: s, title: L.title, text: L.textContent });
+      out.push({ date: L.date, stock: s, live: L });
     }));
-    return out.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    return out;
   })();
+  const executed = monthTrades.filter(t => !isObserveTrade(t));   // 실제 진입
+  const observed = monthTrades.filter(isObserveTrade);            // 관망(미진입)
+  const teacherIn = (date, stock) => teacherPairs.some(p => p.date === date && matchStockName(p.stock, stock));
+  const iExecuted = (date, stock) => executed.some(t => t.date === date && matchStockName(t.stock, stock));
+
+  // 3그룹 복기 (관망/미인지는 '안 산 것'으로 통합)
+  const g1 = executed.filter(t => teacherIn(t.date, t.stock));    // 강사 진입 + 나 실행
+  const g3 = executed.filter(t => !teacherIn(t.date, t.stock));   // 강사 미진입 + 나 단독 실행
+  const g2 = teacherPairs
+    .filter(p => !iExecuted(p.date, p.stock))                     // 강사 진입 + 나 미실행(관망 or 기록없음)
+    .map(p => ({ ...p, obs: observed.find(t => t.date === p.date && matchStockName(t.stock, p.stock)) }))
+    .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
 
   const generate = async () => {
     if (!monthTrades.length && !monthLives.length) { setFeedback("❌ 이번 달 데이터가 없습니다."); return; }
@@ -3771,42 +3782,36 @@ function MonthlyReviewTab({ techniques = [], onOpenTrade }) {
       scored.forEach(t => { const k = t.technique || "미분류"; (byTech[k] = byTech[k] || { n: 0, w: 0, pnl: 0 }); byTech[k].n++; if (parseFloat(t.pnlRate) > 0) byTech[k].w++; byTech[k].pnl += parseFloat(t.pnl) || 0; });
       const techLine = Object.entries(byTech).sort((a, b) => b[1].pnl - a[1].pnl)
         .map(([k, v]) => `${k}: ${v.n}건 승률${Math.round(v.w / v.n * 100)}% 손익${v.pnl.toLocaleString()}`).join(" / ") || "(없음)";
-      // 강사가 진입한 (날짜|종목) 집합 - 관망했는데 강사는 진입한 경우를 표시하기 위함
-      const liveStockDay = new Set();
-      monthLives.forEach(L => stockList(L.stock).forEach(s => liveStockDay.add(`${L.date}|${s}`)));
-      // 매매별 AI 분석 요약(이미 저장된 분석 재활용 → 개별 재분석 비용 없음). 관망(미진입)은 별도 표기
-      const digests = monthTrades
-        .sort((a, b) => (a.date || "").localeCompare(b.date || ""))
-        .map(t => {
-          const a = stripLec(t.aiAnalysis || "");
-          const obs = isObserveTrade(t);
-          const teacherIn = stockList(t.stock).some(s => liveStockDay.has(`${t.date}|${s}`));
-          const head = obs
-            ? `[id:${t.id} | ${t.date} ${t.stock} ${t.technique || "-"} 관망(미진입)${teacherIn ? " ※강사는 이날 이 종목 진입함" : ""}]`
-            : `[id:${t.id} | ${t.date} ${t.stock} ${t.technique || "-"} 수익률${t.pnlRate}%]`;
-          return `${head}${t.reason ? ` 이유:${t.reason.slice(0, 120)}` : ""}${a ? `\n▶분석요약: ${a.slice(0, 650)}` : " (AI분석 없음 — 아직 미분석)"}`;
-        }).join("\n\n");
-      const missedTxt = missed.length
-        ? missed.map(m => `- ${m.date} ${m.stock}${m.title ? ` (${m.title})` : ""}: ${(m.text || "").replace(/\s+/g, " ").slice(0, 220)}`).join("\n")
-        : "(놓친 매매 없음 — 강사가 매매한 종목은 모두 대응함)";
+      // 매매 digest(저장된 AI 분석 재활용 → 개별 재분석 비용 없음)
+      const dg = (t) => {
+        const a = stripLec(t.aiAnalysis || "");
+        return `[id:${t.id} | ${t.date} ${t.stock} ${t.technique || "-"} 수익률${t.pnlRate}%]${t.reason ? ` 이유:${t.reason.slice(0, 120)}` : ""}${a ? `\n  ▶분석요약: ${a.slice(0, 600)}` : " (AI분석 없음)"}`;
+      };
+      const byDate = (a, b) => (a.date || "").localeCompare(b.date || "");
+      const g1txt = g1.length ? [...g1].sort(byDate).map(dg).join("\n\n") : "(없음)";
+      const g3txt = g3.length ? [...g3].sort(byDate).map(dg).join("\n\n") : "(없음)";
+      const g2txt = g2.length ? g2.map(p => {
+        const mine = p.obs ? `내 기록=관망(id:${p.obs.id})${p.obs.reason ? ` 이유:${p.obs.reason.slice(0, 90)}` : ""}` : "내 기록=없음";
+        return `- ${p.date} ${p.stock}${p.live.title ? ` (${p.live.title})` : ""} | ${mine}\n  강사카톡:${(p.live.textContent || "").replace(/\s+/g, " ").slice(0, 200)}`;
+      }).join("\n") : "(없음 — 강사가 진입한 종목은 모두 나도 실행함)";
       const techNames = techniques.map((t, i) => `${i + 1}강 ${t.name}`).join(", ");
 
       const prompt =
         `[이번 달: ${month}] 실행 매매 ${executedN}건 + 관망(미진입) ${observeN}건 = 기록 ${monthTrades.length}건, 채점가능 ${scored.length}건, 승률 ${scored.length ? Math.round(wins / scored.length * 100) : 0}%, 총손익 ${totalPnl.toLocaleString()}원(괄호숫자=만원)\n` +
-        `※ '관망(미진입)'은 실제 진입 없이 지켜보기만 한 기록(매수/매도가 없음)이다. 손익 통계엔 없지만 '진입/관망 의사결정'의 복기 대상이며, 특히 '강사는 진입함' 표시가 붙은 관망은 놓친 기회일 수 있으니 반드시 짚을 것.\n` +
         `[기법별] ${techLine}\n\n` +
-        `[매매·관망별 AI 분석 요약 — 각 항목의 정답매매/개선점이 이미 담겨 있음. 이걸 근거로 공통 패턴을 뽑을 것]\n${digests || "(기록 없음)"}\n\n` +
-        `[강사(교본)는 매매했으나 내가 기록조차 없는 종목 — 강사 당일 카톡 발췌]\n${missedTxt}\n\n` +
+        `아래처럼 매매를 강사 진입 여부 × 내 실행 여부로 3그룹으로 나눴다. (관망이든 아예 미인지든 '내가 안 산 것'은 그룹2로 통합)\n\n` +
+        `[그룹1: 강사도 진입 + 나도 실행] ${g1.length}건 — 저장된 분석의 정답매매/개선점 포함\n${g1txt}\n\n` +
+        `[그룹2: 강사는 진입, 나는 미실행(관망 or 미인지)] ${g2.length}건 — 강사 당일 카톡 발췌\n${g2txt}\n\n` +
+        `[그룹3: 강사는 미진입, 나만 단독 실행] ${g3.length}건\n${g3txt}\n\n` +
         `[강의록 목록]\n${techNames || "(없음)"}\n\n` +
         `위 데이터로 한 달 매매를 종합 복기하라. 반드시 실제 매매 날짜·종목을 구체적으로 인용하고, 일반론은 금지.\n` +
-        `[매매 인용 규칙] 특정 매매/관망을 예시로 콕 집어 언급할 때는 그 종목명을 반드시 \`[YYYY-MM-DD 종목명](t:ID)\` 형식의 링크로 표기(ID는 위 각 항목 맨앞 id 값). 예: [2026-05-14 코스모로보틱스](t:123). 링크는 예시로 지목하는 첫 언급에만 쓰고 남발하지 말 것. 강사만 매매한(내 id가 없는) 종목은 링크 없이 종목명만 쓸 것.\n` +
+        `[매매 인용 규칙] 특정 매매를 예시로 콕 집어 언급할 때는 그 종목명을 반드시 \`[YYYY-MM-DD 종목명](t:ID)\` 형식의 링크로 표기(ID는 위 각 항목 맨앞 id 값). 예: [2026-05-14 코스모로보틱스](t:123). 링크는 예시로 지목하는 첫 언급에만 쓰고 남발하지 말 것. 그룹2에서 내 id가 없는(기록없음) 종목은 링크 없이 종목명만 쓸 것.\n` +
         `마크다운으로 아래 순서:\n` +
-        `## 1. 한 달 총평 (수치·기법 편중·실행 vs 관망 비중·전반 경향)\n` +
-        `## 2. 반복된 미흡·실수 패턴 (개별 매매 인용, 왜 반복되는지. 진입했어야 할 자리를 관망했거나 관망했어야 할 자리에 진입한 '의사결정 실수'도 포함)\n` +
-        `## 3. 정답매매 vs 실제매매 — 공통적으로 벌어진 갭 (진입/청산 타이밍·손절·물량 등 어디서 어긋났는지)\n` +
-        `## 4. 관망 복기 — '강사는 진입함' 표시된 관망을 중심으로, 왜 관망했는지·진입 자리였는지·다음엔 무엇을 보고 진입 판단할지\n` +
-        `## 5. 놓친 매매 (강사 대비, 기록조차 없는 종목) — 왜 놓쳤을지 추정 + 다음에 잡으려면 무엇을 봐야 하는지\n` +
-        `## 6. 다음 달 개선 액션 (3~5개, 바로 실행 가능한 체크리스트로)`;
+        `## 1. 한 달 총평 (수치·기법 편중·3그룹 분포·전반 경향)\n` +
+        `## 2. 강사도 진입 + 나도 실행 [그룹1] — 교본 대비 내 진입/청산이 어땠는지, 정답매매 vs 실제매매의 공통 갭(타이밍·손절·물량)\n` +
+        `## 3. 강사 진입 + 나는 미실행 [그룹2] — 강사는 샀는데 나는 못/안 산 종목들. 왜 안 샀는지(관망 사유 포함)·진입 자리였는지·다음엔 무엇을 보고 잡을지\n` +
+        `## 4. 강사 미진입 + 나만 단독 실행 [그룹3] — 강사 없이 독자 진입한 매매의 근거가 강의록에 부합했는지, 성과/리스크(무리한 진입은 아니었는지)\n` +
+        `## 5. 다음 달 개선 액션 (3~5개, 바로 실행 가능한 체크리스트로)`;
 
       const result = await claude(
         "주식 단기매매 복기 코치. 한 달치 매매 데이터를 종합해 구체적이고 실행가능한 개선점을 도출한다. 반드시 제공된 실제 매매/강사 데이터에 근거하고, 날짜·종목을 인용하며, 근거 없는 일반론을 쓰지 않는다.",
@@ -3836,10 +3841,9 @@ function MonthlyReviewTab({ techniques = [], onOpenTrade }) {
 
       {loading ? <div style={{ color: "#555", padding: 40, textAlign: "center" }}>로딩 중...</div> : (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2,1fr)" : "repeat(5,1fr)", gap: 10, marginBottom: 14 }}>
-            {[["실행 매매", `${executedN}건`, "#ddd"], ["관망", `${observeN}건`, observeN ? "#f39c12" : "#666"],
-              ["AI분석 완료", `${analyzedN}/${monthTrades.length}`, analyzedN === monthTrades.length ? "#4caf50" : "#f39c12"],
-              ["강사 실전매매", `${monthLives.length}건`, "#4f8ef7"], ["놓친 매매", `${missed.length}건`, missed.length ? "#e74c3c" : "#4caf50"]
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2,1fr)" : "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
+            {[["강사O·나 실행", `${g1.length}건`, "#4caf50"], ["강사O·나 미실행", `${g2.length}건`, g2.length ? "#e74c3c" : "#4caf50"],
+              ["강사X·나 단독", `${g3.length}건`, g3.length ? "#f39c12" : "#666"], ["AI분석 완료", `${analyzedN}/${monthTrades.length}`, analyzedN === monthTrades.length ? "#4caf50" : "#f39c12"]
             ].map(([l, v, c]) => (
               <div key={l} style={{ ...box, textAlign: "center" }}>
                 <div style={{ fontSize: 11, color: "#555", marginBottom: 4 }}>{l}</div>
@@ -3854,13 +3858,14 @@ function MonthlyReviewTab({ techniques = [], onOpenTrade }) {
             </div>
           )}
 
-          {missed.length > 0 && (
+          {g2.length > 0 && (
             <div style={{ ...box, marginBottom: 14 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, color: "#e74c3c" }}>🎯 강사는 매매했는데 내가 놓친 종목 ({missed.length})</div>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, color: "#e74c3c" }}>🎯 강사는 진입했는데 내가 안 산 종목 ({g2.length}) — 관망/미인지 포함</div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {missed.map((m, i) => (
-                  <span key={i} style={{ background: "#2a1a1a", border: "1px solid #5a2d2d", borderRadius: 20, padding: "3px 11px", fontSize: 12, color: "#e0a0a0" }}>
-                    {m.date?.slice(5)} {m.stock}
+                {g2.map((p, i) => (
+                  <span key={i} title={p.obs ? "관망 기록 있음" : "기록 없음"}
+                    style={{ background: "#2a1a1a", border: "1px solid #5a2d2d", borderRadius: 20, padding: "3px 11px", fontSize: 12, color: "#e0a0a0" }}>
+                    {p.date?.slice(5)} {p.stock} {p.obs ? "👀" : ""}
                   </span>
                 ))}
               </div>
