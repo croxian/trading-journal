@@ -235,6 +235,14 @@ const dayOfWeek = (dateStr) => {
   return new Date(y, m - 1, d).getDay();
 };
 
+// 원칙에 맞는 손절 기준(기법별, %): 손실이라도 이 값 이내(예: 상따 -2%까지)면 '원칙 손절'로 규율을 지킨 것 →
+// 월간복기 '보정 승률'에서 성공적 실행으로 반영. 그보다 나쁜 손실은 '원칙 위반(늦은 손절)'. 미지정 기법은 기본값.
+const STOP_LIMIT = { "상따": -2 };   // 필요 시 기법명: 허용손절폭(%) 추가/수정
+const DEFAULT_STOP_LIMIT = -2;
+const stopLimitOf = (technique) => (technique && STOP_LIMIT[technique] != null ? STOP_LIMIT[technique] : DEFAULT_STOP_LIMIT);
+const isPrincipledStop = (t) => { const r = parseFloat(t?.pnlRate); return !isNaN(r) && r < 0 && r >= stopLimitOf(t.technique); };
+const isViolationStop = (t) => { const r = parseFloat(t?.pnlRate); return !isNaN(r) && r < 0 && r < stopLimitOf(t.technique); };
+
 // ==================== 공통 유틸 ====================
 const categoryColor = (cat) => {
   if (!cat) return "#7f8c8d";
@@ -3931,6 +3939,10 @@ function MonthlyReviewTab({ techniques = [], onOpenTrade, onOpenLecture }) {
   const monthLives = lives.filter(t => (t.date || "").startsWith(month) && !t.deletedAt && t.category !== "강의");
   const scored = monthTrades.filter(t => t.pnlRate !== "" && t.pnlRate != null);
   const wins = scored.filter(t => parseFloat(t.pnlRate) > 0).length;
+  const principledN = scored.filter(isPrincipledStop).length;   // 원칙에 맞는 손절
+  const violationN = scored.filter(isViolationStop).length;     // 원칙 위반(늦은 손절)
+  const rawWinRate = scored.length ? Math.round(wins / scored.length * 100) : 0;
+  const adjWinRate = scored.length ? Math.round((wins + principledN) / scored.length * 100) : 0;  // 원칙 손절을 성공적 실행으로 보정
   const totalPnl = monthTrades.reduce((s, t) => s + (parseFloat(t.pnl) || 0), 0);
   const analyzedN = monthTrades.filter(t => t.aiAnalysis).length;
   const observeN = monthTrades.filter(isObserveTrade).length;       // 관망(미진입)
@@ -3968,10 +3980,11 @@ function MonthlyReviewTab({ techniques = [], onOpenTrade, onOpenLecture }) {
       scored.forEach(t => { const k = t.technique || "미분류"; (byTech[k] = byTech[k] || { n: 0, w: 0, pnl: 0 }); byTech[k].n++; if (parseFloat(t.pnlRate) > 0) byTech[k].w++; byTech[k].pnl += parseFloat(t.pnl) || 0; });
       const techLine = Object.entries(byTech).sort((a, b) => b[1].pnl - a[1].pnl)
         .map(([k, v]) => `${k}: ${v.n}건 승률${Math.round(v.w / v.n * 100)}% 손익${v.pnl.toLocaleString()}`).join(" / ") || "(없음)";
-      // 매매 digest(저장된 AI 분석 재활용 → 개별 재분석 비용 없음)
+      // 매매 digest(저장된 AI 분석 재활용 → 개별 재분석 비용 없음). 손실은 원칙손절/원칙위반 표기
       const dg = (t) => {
         const a = stripLec(t.aiAnalysis || "");
-        return `[id:${t.id} | ${t.date} ${t.stock} ${t.technique || "-"} 수익률${t.pnlRate}%]${t.reason ? ` 이유:${t.reason.slice(0, 120)}` : ""}${a ? `\n  ▶분석요약: ${a.slice(0, 600)}` : " (AI분석 없음)"}`;
+        const stopTag = isPrincipledStop(t) ? " [원칙손절✓]" : isViolationStop(t) ? ` [원칙위반 손절: 기준 ${stopLimitOf(t.technique)}% 초과]` : "";
+        return `[id:${t.id} | ${t.date} ${t.stock} ${t.technique || "-"} 수익률${t.pnlRate}%${stopTag}]${t.reason ? ` 이유:${t.reason.slice(0, 120)}` : ""}${a ? `\n  ▶분석요약: ${a.slice(0, 600)}` : " (AI분석 없음)"}`;
       };
       const byDate = (a, b) => (a.date || "").localeCompare(b.date || "");
       const g1txt = g1.length ? [...g1].sort(byDate).map(dg).join("\n\n") : "(없음)";
@@ -3983,7 +3996,8 @@ function MonthlyReviewTab({ techniques = [], onOpenTrade, onOpenLecture }) {
       const techNames = techniques.map((t, i) => `${i + 1}강 ${t.name}`).join(", ");
 
       const prompt =
-        `[이번 달: ${month}] 실행 매매 ${executedN}건 + 관망(미진입) ${observeN}건 = 기록 ${monthTrades.length}건, 채점가능 ${scored.length}건, 승률 ${scored.length ? Math.round(wins / scored.length * 100) : 0}%, 총손익 ${totalPnl.toLocaleString()}원(괄호숫자=만원)\n` +
+        `[이번 달: ${month}] 실행 매매 ${executedN}건 + 관망(미진입) ${observeN}건 = 기록 ${monthTrades.length}건, 채점가능 ${scored.length}건, 승률 ${rawWinRate}%, 보정승률(원칙손절 반영) ${adjWinRate}%, 총손익 ${totalPnl.toLocaleString()}원(괄호숫자=만원)\n` +
+        `※ [승률 보정 원칙] 손실이라도 '원칙에 맞는 손절'(기법별 허용 손절폭 이내 — 예: 상따는 -2% 이내)은 규율을 지킨 좋은 실행이므로 실패로 보지 말 것. 반대로 기준을 초과한 손실은 '원칙 위반(늦은/깊은 손절)'로 개선 대상이다. 이번 달 원칙손절 ${principledN}건 / 원칙위반 ${violationN}건. 손실 매매는 digest의 [원칙손절✓]/[원칙위반...] 표기를 근거로 '원칙대로 끊었는지 vs 늦게 끊었는지'로 구분해 평가하고, 원칙위반 손절을 집중적으로 지적할 것. 보정승률로 '실행 규율'을, 원승률·손익으로 '결과'를 함께 언급.\n` +
         `[기법별] ${techLine}\n\n` +
         `아래처럼 매매를 강사 진입 여부 × 내 실행 여부로 3그룹으로 나눴다. (관망이든 아예 미인지든 '내가 안 산 것'은 그룹2로 통합)\n\n` +
         `[그룹1: 강사도 진입 + 나도 실행] ${g1.length}건 — 저장된 분석의 정답매매/개선점 포함\n${g1txt}\n\n` +
@@ -4041,6 +4055,13 @@ function MonthlyReviewTab({ techniques = [], onOpenTrade, onOpenLecture }) {
                 <div style={{ fontSize: 18, fontWeight: 700, color: c }}>{v}</div>
               </div>
             ))}
+          </div>
+
+          <div style={{ ...box, display: "flex", flexWrap: "wrap", gap: 16, alignItems: "center", marginBottom: 14, fontSize: 12.5, color: "#aaa" }}>
+            <span>총손익 <b style={{ color: pnlColor(totalPnl) }}>{totalPnl.toLocaleString()}원</b></span>
+            <span>승률 <b style={{ color: "#ddd" }}>{rawWinRate}%</b></span>
+            <span title="원칙에 맞는 손절(예: 상따 -2% 이내)을 성공적 실행으로 보정한 승률">보정승률 <b style={{ color: "#8ee0a0" }}>{adjWinRate}%</b> <span style={{ color: "#666" }}>(원칙손절 반영)</span></span>
+            <span>손절 규율: <b style={{ color: "#4caf50" }}>원칙 {principledN}</b> / <b style={{ color: "#e74c3c" }}>위반 {violationN}</b></span>
           </div>
 
           {analyzedN < monthTrades.length && monthTrades.length > 0 && (
