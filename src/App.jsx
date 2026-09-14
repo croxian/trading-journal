@@ -122,6 +122,31 @@ const sbSaveReview = async (month, content) => {
   });
   if (!r.ok) throw new Error(await r.text());
 };
+// 흐름분석 저장 (flow_reviews 테이블) - 테이블 미생성 시 조회 [] / 저장 예외
+const sbGetFlowReviews = async () => {
+  try {
+    const r = await fetch(`${SB_URL}/rest/v1/flow_reviews?select=id,title,trade_ids,content,created_at&order=created_at.desc&limit=50`, { headers: HDR });
+    if (!r.ok) return null;   // 테이블 미생성 등 → null(로컬 캐시 유지)
+    return r.json();
+  } catch { return null; }
+};
+const FLOW_CACHE = "flow_reviews_cache";
+const loadFlowCache = () => { try { return JSON.parse(localStorage.getItem(FLOW_CACHE) || "[]"); } catch { return []; } };
+const saveFlowCache = (list) => { try { localStorage.setItem(FLOW_CACHE, JSON.stringify(list.slice(0, 50))); } catch {} };
+const sbSaveFlowReview = async (row) => {
+  const r = await fetch(`${SB_URL}/rest/v1/flow_reviews`, {
+    method: "POST",
+    headers: { ...HDR, Prefer: "return=representation" },
+    body: JSON.stringify(row),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  const d = await r.json();
+  return d[0];
+};
+const sbDeleteFlowReview = async (id) => {
+  const r = await fetch(`${SB_URL}/rest/v1/flow_reviews?id=eq.${id}`, { method: "DELETE", headers: HDR });
+  if (!r.ok) throw new Error(await r.text());
+};
 
 // 실전매매 이미지: 하위호환 - 문자열(b64) 또는 {d:b64, s:종목태그} 모두 허용 → 항상 {d,s}로 정규화
 const normLiveImgs = (arr) => (arr || []).map(x => (typeof x === "string" ? { d: x, s: "" } : { d: x.d, s: x.s || "" }));
@@ -1113,6 +1138,8 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
   const [batchState, setBatchState] = useState(null);   // 선택 배치 분석 진행 {done,total}
   const [flowReport, setFlowReport] = useState(null);   // 흐름 멀티분석 결과 {content, recLectureId}
   const [flowLoading, setFlowLoading] = useState(false);
+  const [flowReviews, setFlowReviews] = useState([]);   // 저장된 흐름분석 목록
+  const [showFlowList, setShowFlowList] = useState(false);
   const [trashSelectMode, setTrashSelectMode] = useState(false);
   const [trashSelectedIds, setTrashSelectedIds] = useState(new Set());
   const [sortBy, setSortBy] = useState("date_desc");
@@ -1183,6 +1210,12 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
     setDetailImgLoading(false);
   };
   useEffect(() => { load(); }, [load]);
+
+  // 저장된 흐름분석 로드: 로컬 캐시 즉시 표시 후 클라우드로 갱신(테이블 없으면 캐시 유지)
+  useEffect(() => {
+    setFlowReviews(loadFlowCache());
+    sbGetFlowReviews().then(rows => { if (rows) { setFlowReviews(rows); saveFlowCache(rows); } });
+  }, []);
 
   // 다른 탭(월간복기 리포트의 예시 링크 등)에서 특정 매매로 이동 요청 → 로드 후 상세 열기
   useEffect(() => {
@@ -1945,10 +1978,24 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
         "주식 단기매매 흐름 복기 코치. 여러 매매를 시간순 스토리로 엮어 포지션 전개·판단 일관성·반복 실수를 도출한다. 반드시 제공된 실제 매매 데이터에 근거하고 날짜·종목을 인용한다.",
         prompt, 6000, undefined, "claude-fable-5");
       const lecMatch = result.match(/LECTURE:\s*(\d+)/);
+      const recId = lecMatch ? parseInt(lecMatch[1]) : null;
       const content = result.replace(/\n?LECTURE:\s*\d+\s*$/, "").trim();
-      setFlowReport({ content, recLectureId: lecMatch ? parseInt(lecMatch[1]) : null });
+      setFlowReport({ content, recLectureId: recId });
+      // 저장(클라우드; 미생성 시 로컬 보관). 추천 강의는 숨김 마커로 content에 함께 저장
+      const title = `${stocks.slice(0, 3).join(", ")}${stocks.length > 3 ? " 외" : ""} · ${targets[0].date}~${targets[targets.length - 1].date} (${targets.length}건)`;
+      const row = { title, trade_ids: targets.map(t => t.id).join(","), content: withLec(content, recId), created_at: new Date().toISOString() };
+      let savedRow;
+      try { savedRow = await sbSaveFlowReview(row); }
+      catch { savedRow = { id: `local-${Date.now()}`, ...row }; setFeedback("⚠️ 클라우드 저장 실패(로컬 보관). flow_reviews 테이블 SQL을 실행해 주세요."); }
+      setFlowReviews(p => { const next = [savedRow, ...p]; saveFlowCache(next); return next; });
     } catch (e) { setFeedback(`❌ ${e.message}`); }
     setFlowLoading(false);
+  };
+
+  const openFlowReview = (r) => setFlowReport({ content: stripLec(r.content), recLectureId: parseLec(r.content) });
+  const deleteFlowReview = async (id) => {
+    try { if (typeof id === "number") await sbDeleteFlowReview(id); } catch {}
+    setFlowReviews(p => { const next = p.filter(r => r.id !== id); saveFlowCache(next); return next; });
   };
 
   const handlePermDelete = async (id) => {
@@ -2529,6 +2576,25 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
           </div>
         ) : null;
 
+        const FlowList = flowReviews.length > 0 ? (
+          <div style={{ marginBottom: 10, border: "1px solid #2e7d32", borderRadius: 8, background: "#101a12", padding: "8px 12px" }}>
+            <div onClick={() => setShowFlowList(v => !v)} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, color: "#8ee0a0", fontWeight: 600 }}>
+              🔗 저장된 흐름분석 ({flowReviews.length})<span style={{ marginLeft: "auto", color: "#4caf50" }}>{showFlowList ? "▲" : "▼"}</span>
+            </div>
+            {showFlowList && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+                {flowReviews.map(r => (
+                  <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", background: "#12301a", border: "1px solid #2e7d32", borderRadius: 6 }}>
+                    <button onClick={() => openFlowReview(r)} style={{ flex: 1, textAlign: "left", background: "none", border: "none", color: "#8ee0a0", cursor: "pointer", fontSize: 12.5, padding: 0 }}>{r.title || "흐름분석"}</button>
+                    <span style={{ fontSize: 10, color: "#557" }}>{(r.created_at || "").slice(0, 10)}</span>
+                    <button onClick={() => deleteFlowReview(r.id)} title="삭제" style={{ background: "#3a1a1a", border: "none", color: "#e74c3c", borderRadius: 4, cursor: "pointer", fontSize: 11, padding: "2px 7px" }}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null;
+
         const searchBox = (
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 종목·매매이유 검색 (띄어쓰기 그대로, and/or 연산)"
@@ -2537,15 +2603,16 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
             {matcher && <span style={{ fontSize: 12, color: "#888", whiteSpace: "nowrap" }}>{sorted.length}건</span>}
           </div>
         );
-        if (sorted.length === 0) return <div>{searchBox}<div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>{matcher ? "검색 결과 없음" : "매매 기록 없음"}</div></div>;
+        if (sorted.length === 0) return <div>{searchBox}{FlowList}<div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>{matcher ? "검색 결과 없음" : "매매 기록 없음"}</div></div>;
 
-        if (!groupByDate) return <div>{searchBox}<div style={{ display: "grid", gap: 8 }}>{SelectBar}{sorted.map(TradeRow)}</div></div>;
+        if (!groupByDate) return <div>{searchBox}{FlowList}<div style={{ display: "grid", gap: 8 }}>{SelectBar}{sorted.map(TradeRow)}</div></div>;
         const grouped = sorted.reduce((acc, t) => { const d = t.date || "날짜없음"; (acc[d] = acc[d] || []).push(t); return acc; }, {});
         const sortedDates = [...new Set(sorted.map(t => t.date || "날짜없음"))];
         const dayPnl = (ts) => ts.reduce((s, t) => s + (parseFloat(t.pnl) || 0), 0);
         return (
           <div style={{ display: "grid", gap: 4 }}>
             {searchBox}
+            {FlowList}
             {SelectBar}
             {sortedDates.map(date => (
               <div key={date} id={`date-sec-${date}`} style={{ scrollMarginTop: isMobile ? 90 : 50 }}>
