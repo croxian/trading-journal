@@ -2056,6 +2056,15 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
 
   return (
     <div>
+      {/* 배치/흐름분석 진행 배너 - 어느 화면에서나 보이고, 완료분은 자동 저장되어 이동해도 계속됨 */}
+      {(batchState || flowLoading) && (
+        <div style={{ position: "fixed", top: isMobile ? 70 : 52, left: "50%", transform: "translateX(-50%)", zIndex: 190, background: "#161a24", border: "1px solid #8e44ad", borderRadius: 20, padding: "6px 16px", boxShadow: "0 2px 12px rgba(0,0,0,0.45)", display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#d6b8f0", whiteSpace: "nowrap", maxWidth: "92vw", overflow: "hidden" }}>
+          <span>🧠</span>
+          {batchState
+            ? `선택 각각 분석 중… ${batchState.done}/${batchState.total} · 완료분 자동 저장(이동해도 계속)`
+            : "흐름분석 중… 완료되면 자동 저장"}
+        </div>
+      )}
       {/* 흐름 멀티분석 결과 오버레이 */}
       {flowReport && (
         <div onClick={() => setFlowReport(null)}
@@ -2617,6 +2626,13 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
             {sortedDates.map(date => (
               <div key={date} id={`date-sec-${date}`} style={{ scrollMarginTop: isMobile ? 90 : 50 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 2px", borderBottom: "1px solid #2a2d3a", marginBottom: 6 }}>
+                  {selectMode && (() => {
+                    const ids = grouped[date].map(t => t.id);
+                    const allSel = ids.length > 0 && ids.every(id => selectedIds.has(id));
+                    return <input type="checkbox" checked={allSel} title="이 날짜 전체 선택"
+                      onChange={e => setSelectedIds(prev => { const n = new Set(prev); ids.forEach(id => e.target.checked ? n.add(id) : n.delete(id)); return n; })}
+                      style={{ accentColor: "#4f8ef7", width: 14, height: 14, cursor: "pointer" }} />;
+                  })()}
                   <span style={{ fontSize: 12, fontWeight: 600, color: "#4f8ef7" }}>📅 {date}</span>
                   <span style={{ fontSize: 11, color: "#555" }}>{grouped[date].length}건</span>
                   <span style={{ marginLeft: "auto", fontSize: 12, fontWeight: 600, color: pnlColor(dayPnl(grouped[date])) }}>
