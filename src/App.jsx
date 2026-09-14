@@ -1063,6 +1063,11 @@ const LEC_RE = /\n?<!--LEC:(\d+)-->\s*$/;
 const stripLec = (s) => (s ? s.replace(LEC_RE, "").trim() : s);
 const parseLec = (s) => { const m = s && s.match(LEC_RE); return m ? parseInt(m[1]) : null; };
 const withLec = (text, id) => (id ? `${text}\n<!--LEC:${id}-->` : text);
+// 월간복기/멀티분석: 추천 강의 여러 개를 숨김 마커로 저장(별도 컬럼 불필요)
+const LECS_RE = /\n?<!--LECS:([\d,]+)-->\s*$/;
+const parseLecs = (s) => { const m = s && s.match(LECS_RE); return m ? m[1].split(",").map(Number).filter(Boolean) : []; };
+const stripLecs = (s) => (s ? s.replace(LECS_RE, "").trim() : s);
+const withLecs = (text, ids) => (ids && ids.length ? `${text}\n<!--LECS:${ids.join(",")}-->` : text);
 
 // ==================== 매매일지 탭 ====================
 function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeConsumed }) {
@@ -1105,6 +1110,9 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
+  const [batchState, setBatchState] = useState(null);   // 선택 배치 분석 진행 {done,total}
+  const [flowReport, setFlowReport] = useState(null);   // 흐름 멀티분석 결과 {content, recLectureId}
+  const [flowLoading, setFlowLoading] = useState(false);
   const [trashSelectMode, setTrashSelectMode] = useState(false);
   const [trashSelectedIds, setTrashSelectedIds] = useState(new Set());
   const [sortBy, setSortBy] = useState("date_desc");
@@ -1513,13 +1521,16 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
     setFill0397Loading(false);
   };
 
-  const analyzeDetailTrade = async () => {
-    if (!selected?.reason) { setFeedback("❌ 매매 이유를 먼저 입력하세요."); return; }
-    setDetailAiLoading(true); setDetailAiAnalysis(""); setAiEditMode(false);
+  const analyzeDetailTrade = async (tradeArg) => {
+    const trade = tradeArg || selected;   // 인자 없으면 상세의 selected, 있으면 배치 대상 매매
+    const isDetail = !tradeArg;
+    if (!trade?.reason) { if (isDetail) setFeedback("❌ 매매 이유를 먼저 입력하세요."); return { ok: false, skipped: true }; }
+    if (isDetail) { setDetailAiLoading(true); setDetailAiAnalysis(""); setAiEditMode(false); }
     try {
+      const chartImg = trade.chartImg ?? await sbGetChartImg(trade.id);   // 배치는 목록 데이터라 차트 미로드 → 개별 로딩
       // 1. 적용 기법과 관련된 강의록을 우선 선별하되, 나머지 강의록도 요약 형태로 함께 제공 (다른 강의록에 유사 내용이 있을 수 있음)
-      const group = techGroupOf(selected.technique);
-      const keywords = [...new Set([selected.technique, group, ...group.split("-")].filter(s => s && s.length >= 2))];
+      const group = techGroupOf(trade.technique);
+      const keywords = [...new Set([trade.technique, group, ...group.split("-")].filter(s => s && s.length >= 2))];
       const relatedTechs = techniques.filter(t => {
         const hay = `${t.name || ""} ${t.category || ""} ${(t.tags || []).join(" ")} ${t.rawInput || ""}`;
         return keywords.some(k => hay.includes(k));
@@ -1537,20 +1548,20 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
       ).join('\n');
       const techNote = relatedTechs.length
         ? ""
-        : `\n(주의: 이 매매의 기법(${selected.technique || "미지정"})과 직접 매칭되는 강의록을 찾지 못함. 기법 매칭이 안 된다는 점을 분석에 명시할 것.)`;
+        : `\n(주의: 이 매매의 기법(${trade.technique || "미지정"})과 직접 매칭되는 강의록을 찾지 못함. 기법 매칭이 안 된다는 점을 분석에 명시할 것.)`;
 
       // 1-1. 동일 날짜 + 동일 종목, 다른 기법으로 세분화된 매매 (있다면 기법별로 구분하여 분석)
-      const siblingTrades = trades.filter(t => t.id !== selected.id && !t.deletedAt && t.date === selected.date && matchStock(t.stock, selected.stock));
+      const siblingTrades = trades.filter(t => t.id !== trade.id && !t.deletedAt && t.date === trade.date && matchStock(t.stock, trade.stock));
       const siblingNote = siblingTrades.length
-        ? `\n[같은 날(${selected.date}) 동일 종목(${selected.stock})의 다른 기법 매매 - 기법별로 세분화되어 기록됨]\n` +
+        ? `\n[같은 날(${trade.date}) 동일 종목(${trade.stock})의 다른 기법 매매 - 기법별로 세분화되어 기록됨]\n` +
           siblingTrades.map(t => `[기법:${t.technique || "-"}] 매수가:${t.buyPrice || "-"} 매도가:${t.sellPrice || "-"} 수익률:${t.pnlRate}%\n매매이유: ${t.reason?.slice(0, 150) || "-"}`).join('\n\n') +
-          `\n위 매매들은 같은 종목을 진입/청산 구간별로 기법을 나누어 기록한 것이다. 이번 분석은 [현재 매매](기법:${selected.technique || "미지정"})의 매수가/매도가/매매이유에 해당하는 구간에만 집중하고, 다른 기법의 매매와 합쳐서 분석하거나 혼동하지 말 것. 각 기법은 별도로 분석할 것.\n`
+          `\n위 매매들은 같은 종목을 진입/청산 구간별로 기법을 나누어 기록한 것이다. 이번 분석은 [현재 매매](기법:${trade.technique || "미지정"})의 매수가/매도가/매매이유에 해당하는 구간에만 집중하고, 다른 기법의 매매와 합쳐서 분석하거나 혼동하지 말 것. 각 기법은 별도로 분석할 것.\n`
         : "";
 
       // 1-2. KRX 실제 시세 (사전수집된 OHLCV·상한가·갭·등락률·지수) - 차트 판독보다 우선하는 확정 사실
       let marketSection = "";
       try {
-        const md = await sbGetMarketData(selected.stock, selected.date);
+        const md = await sbGetMarketData(trade.stock, trade.date);
         if (md?.summary) {
           const barsTxt = (md.bars || []).map(b => `${b.date} 시${b.o} 고${b.h} 저${b.l} 종${b.c}${b.cndl ? ` ${b.cndl}(몸통${b.body}%·윗꼬리${b.upw}%·아랫꼬리${b.loww}%)` : ""} (등락 ${b.rate ?? "-"}%, 갭 ${b.gap ?? "-"}%, 장중고점 ${b.hrate ?? "-"}%${b.upper ? ", 상한가마감" : ""}${b.listing ? `, ※상장당일: 등락/갭/고점은 전일종가가 아닌 공모가 ${b.base?.toLocaleString?.() ?? b.base}원 대비` : ""})`).join('\n');
           marketSection = `[KRX 정규장 실제 시세 - 확정 사실]\n${md.summary}\n[일별 시세]\n${barsTxt}\n` +
@@ -1561,7 +1572,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
       } catch {}
 
       // 2. 과거 유사 매매 (매매이유 워딩 참고용, 같은 날 다른 기법 매매는 제외)
-      const pastTradesArr = trades.filter(t => t.id !== selected.id && !t.deletedAt && t.reason && !siblingTrades.some(s => s.id === t.id)).slice(0, 15);
+      const pastTradesArr = trades.filter(t => t.id !== trade.id && !t.deletedAt && t.reason && !siblingTrades.some(s => s.id === t.id)).slice(0, 15);
       const pastTrades = pastTradesArr
         .map(t => `[ID:${t.id}] ${t.stock}(${t.date}, ${t.pnlRate}%, 기법:${t.technique || "-"}): ${t.reason?.slice(0, 100)}`).join('\n');
 
@@ -1580,10 +1591,10 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
           lectureRefSection = lectureLives.map(t => `[${t.title || t.stock || "실전강의"}]${t.date ? ` (${t.date})` : ""}\n${(t.textContent || "").slice(0, 1800)}`).join('\n---\n');
         }
         // 동일 날짜 실전매매('강의' 분류는 위에서 별도 처리하므로 제외)
-        const liveMatches = allLive.filter(t => t.date === selected.date && t.category !== "강의");
+        const liveMatches = allLive.filter(t => t.date === trade.date && t.category !== "강의");
         if (liveMatches.length) {
           liveSection = liveMatches.map(t => `[${t.stock}]${t.title ? ` ${t.title}` : ""}\n${(t.textContent || "").slice(0, 400)}`).join('\n---\n');
-          const sameStock = liveMatches.filter(t => matchStock(t.stock, selected.stock));
+          const sameStock = liveMatches.filter(t => matchStock(t.stock, trade.stock));
           if (sameStock.length) {   // 동일 종목·동일 날짜 교본이 있으면 B/S 비교용 카톡 원문 확보
             liveImgIsSameStock = true;
             sameStockLiveNote = sameStock.map(t => `[교본: ${t.stock}${t.title ? " " + t.title : ""}]\n당일 카톡 원문: ${(t.textContent || "").slice(0, 1400)}`).join('\n---\n');
@@ -1594,7 +1605,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
           for (const t of imgTargets) {
             const imgs = await sbGetLiveImages(t.id);           // [{d,s}]
             const stocks = stockList(t.stock);
-            let picked = imgs.filter(im => imgStock(im, stocks) && matchStock(imgStock(im, stocks), selected.stock));
+            let picked = imgs.filter(im => imgStock(im, stocks) && matchStock(imgStock(im, stocks), trade.stock));
             if (!picked.length) picked = imgs;                  // 매칭 실패/헷갈림 → 전체 첨부하고 AI가 종목명으로 판독
             picked.slice(0, 3).forEach(im => liveImageBlocks.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: im.d } }));
           }
@@ -1614,10 +1625,10 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
 
       // 5. 현재 매매 차트 + 첨부 이미지 안내
       const userContent = [];
-      if (selected.chartImg) userContent.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: selected.chartImg } });
+      if (chartImg) userContent.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: chartImg } });
       userContent.push(...liveImageBlocks);
       const chartAxisNote = "\n- 차트 하단 가로축 라벨 해석: 글씨 굵기(볼드 여부)로 구분하지 말 것 - 이미지에서 굵기 구분은 신뢰할 수 없다. 대신 '/' 포함 여부로 구분: '/'가 있는 라벨(예: 05/21, 05/22)은 날짜이고, '/' 없이 숫자만 있는 라벨(예: 10, 11, 12, 13, 14)은 시간(시 단위)이다. 차트는 분봉 등 타임프레임 기준으로 그려지므로 '/' 없는 숫자는 항상 시간이며 '~일'(날짜)로 해석하면 안 된다." +
-        (selected.technique === "투경해제" ? " 단, '투경해제' 기법은 일봉(daily) 차트를 쓰는 경우가 있으며, 이때는 가로축 라벨 전체가 연/월 단위(예: 2026/03, 04, 05)로 표시되므로 위 규칙이 아닌 연/월 단위로 해석할 것." : "");
+        (trade.technique === "투경해제" ? " 단, '투경해제' 기법은 일봉(daily) 차트를 쓰는 경우가 있으며, 이때는 가로축 라벨 전체가 연/월 단위(예: 2026/03, 04, 05)로 표시되므로 위 규칙이 아닌 연/월 단위로 해석할 것." : "");
       const chartMarkupNote = "\n- 차트는 반드시 좌→우 시간순으로 읽을 것. 왼쪽 캔들이 과거, 오른쪽 캔들이 현재/미래다. 차트 왼쪽에 있는 과거 고점·저점·급등락은 현재 매매의 직접 원인이 아닌 '사전 맥락'으로만 참고할 것." +
         "\n- 차트에 표시된 도형 해석: 파란/빨간 오각형(B/S 글자)은 사용자가 실제로 체결한 매수(B)/매도(S) 지점이다. B 마커가 차트 오른쪽에 있다면 왼쪽의 모든 캔들은 '매수 이전 역사'이며 그 구간의 가격 움직임을 현재 매매의 근거로 직접 연결하지 말 것. 분석의 기준점은 B 마커 위치이고, B 이전 차트는 진입 맥락 파악용으로만 활용할 것. '세력의 매수/매도 물량 출현' 같은 추측성 해석을 붙이지 말 것. 사각형(네모) 표시는 정답매매의 이상적 매수(진입) 타점, 동그라미(원/타원) 표시는 정답매매의 이상적 매도(청산) 타점이다. 차트에 네모·동그라미가 여러 개 있을 수 있으며, 개수에 상관없이 보이는 것을 빠짐없이 모두 확인하여 각각의 위치와 가격대를 파악할 것. 실제 매매(B/S 마커)와 정답매매(네모/동그라미)의 위치·가격을 하나씩 비교해 진입·청산 타이밍 차이를 분석에 활용하고, 도형이 보이지 않으면 언급하지 말 것." +
         "\n- 차트에 표시된 % 수치(예: -52.87%, +49.40% 등)는 키움 HTS가 자동 표시하는 '가격 변동폭 주석'이다. 위치와 무관하게 이 수치는 절대 현재 매매의 손익이 아니다. 실제 매매 손익은 오직 매수가·매도가(입력된 수치)와 B/S 마커 위치로만 판단할 것. B 마커 위치의 가격 ≈ 매수가, S 마커 위치의 가격 ≈ 매도가로 크로스체크하여 분석에 활용할 것." +
@@ -1628,27 +1639,27 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
         "\n- 차트 중간을 세로로 가로지르는 빨간(붉은) 수직선은 '날짜(거래일)가 바뀌는 경계'다. 이 선의 왼쪽은 전일(또는 그 이전) 장, 오른쪽은 당일 장이다. 가로축 날짜 라벨과 함께 이 수직선을 기준으로 전일/당일 구간을 구분할 것." +
         "\n- 정규장 시간은 09:00~15:30이다. 차트 시간축에 09:00 이전(프리마켓, 보통 08:00~) 또는 15:30 이후(애프터마켓, ~20:00) 캔들이 보이면 그건 NXT(넥스트레이드) 연장거래 시간대다. 시초/시가는 정규장 09:00 기준과 NXT 08:00 기준이 다를 수 있으니, 매매가 정규장 시간인지 연장 시간인지 구분해 해석할 것(예: 08시대 급등 후 09시 정규장 갭 출발)." +
         "\n- 캔들이 특정 가격대(가격제한폭 상단)에 도달한 뒤 그 가격에서 수평으로 일자로 머물러 있는 구간은 상한가(가격제한폭 도달)에 잠겨 있는 상태다. 특히 장 마감 시점까지 그 상단 가격에 수평으로 붙어 있으면 '상한가로 마감'한 것으로 해석할 것." +
-        (selected.technique === "상따" ? "\n- [상따 기법 규칙] 전일 차트는 상한가로 마감한 것이다(가격제한폭 상단에 수평으로 붙어 마감한 형태). 상따는 정의상 '전일 상한가에서 매수'하는 기법이므로, 입력된 매수가 = 전일 상한가 진입가로 간주할 것. B 마커가 차트에 보이지 않아도 상한가 매수로 전제하고, 상한가 가격은 커서선/수평선이 아니라 입력된 매수가로 판단할 것. 차트에 '최저' 주석 가격이 매수가와 같거나 비슷하게 표시되더라도, 그것은 전일 상한가를 훼손하지 않은 일중 저점일 뿐이므로 입력 매수가를 '저점 선매수'나 '상따 원칙 위반'으로 재해석하지 말 것. 당일은 상한가 다음날로서 갭상승 또는 보합 출발하는 흐름을 중점 분석할 것. 당일 갭하락 출발인 경우는 '상따'가 아닌 '상한가하락시작' 기법에 해당하므로 혼동하지 말 것." : "") +
-        (selected.technique?.startsWith("상한가하락시작") ? "\n- [상한가하락시작 기법 규칙] 전일 차트는 상한가로 마감한 것이다(가격제한폭 상단에 수평으로 붙어 마감한 형태로 확인 가능). 당일은 상한가 다음날이나 갭하락 또는 약세 출발하는 흐름이다. 전일 상한가 마감 후 당일 하락 출발 시점의 매매 맥락을 중점 분석할 것." : "");
-      const imageNote = (selected.chartImg || liveImageBlocks.length)
-        ? `[첨부 이미지]${selected.chartImg ? `\n- (첫 번째 차트) 이 매매일지의 차트 이미지 = 내 매수(B)/매도(S) (캔들 모양, 진입/이탈 시간대 분석에 활용)${chartAxisNote}${chartMarkupNote}` : ""}${liveImageBlocks.length ? (liveImgIsSameStock ? `\n- (이후 ${liveImageBlocks.length}장) [교본 차트] '동일 날짜·동일 종목'의 교본(실전매매=강사 실제 매매) 차트다. 이 차트의 B(매수)/S(매도)는 강사의 실제 진입/청산이자 곧 정답매매(모범 답안)다 — 교본 차트엔 네모/동그라미(정답매매 표식)가 없고 강사 B/S 자체가 정답이다. 위 차트 판독 규칙 중 %주석·수평선·시간축 해석은 교본 차트에도 동일 적용하되, 내 매매일지 차트의 B/S와 교본 차트의 B/S(=정답)를 직접 비교하여 진입·청산 타이밍/가격 차이를 파악할 것. 교본 차트가 여러 장이면 각 차트 상단(HTS/MTS)에 인쇄된 종목명을 읽어 '${selected.stock}' 차트만 비교 대상으로 삼고, 종목명이 다른 차트는 무시할 것(종목명이 안 보이면 캔들 흐름이 이 매매와 맞는 것만 사용).` : `\n- 동일 날짜 실전매매 관련 이미지 ${liveImageBlocks.length}장`) : ""}\n이미지에서 실제로 확인 가능한 내용만 사용하고, 기법 설명과 무관하거나 불확실한 내용은 언급하지 말 것.`
+        (trade.technique === "상따" ? "\n- [상따 기법 규칙] 전일 차트는 상한가로 마감한 것이다(가격제한폭 상단에 수평으로 붙어 마감한 형태). 상따는 정의상 '전일 상한가에서 매수'하는 기법이므로, 입력된 매수가 = 전일 상한가 진입가로 간주할 것. B 마커가 차트에 보이지 않아도 상한가 매수로 전제하고, 상한가 가격은 커서선/수평선이 아니라 입력된 매수가로 판단할 것. 차트에 '최저' 주석 가격이 매수가와 같거나 비슷하게 표시되더라도, 그것은 전일 상한가를 훼손하지 않은 일중 저점일 뿐이므로 입력 매수가를 '저점 선매수'나 '상따 원칙 위반'으로 재해석하지 말 것. 당일은 상한가 다음날로서 갭상승 또는 보합 출발하는 흐름을 중점 분석할 것. 당일 갭하락 출발인 경우는 '상따'가 아닌 '상한가하락시작' 기법에 해당하므로 혼동하지 말 것." : "") +
+        (trade.technique?.startsWith("상한가하락시작") ? "\n- [상한가하락시작 기법 규칙] 전일 차트는 상한가로 마감한 것이다(가격제한폭 상단에 수평으로 붙어 마감한 형태로 확인 가능). 당일은 상한가 다음날이나 갭하락 또는 약세 출발하는 흐름이다. 전일 상한가 마감 후 당일 하락 출발 시점의 매매 맥락을 중점 분석할 것." : "");
+      const imageNote = (chartImg || liveImageBlocks.length)
+        ? `[첨부 이미지]${chartImg ? `\n- (첫 번째 차트) 이 매매일지의 차트 이미지 = 내 매수(B)/매도(S) (캔들 모양, 진입/이탈 시간대 분석에 활용)${chartAxisNote}${chartMarkupNote}` : ""}${liveImageBlocks.length ? (liveImgIsSameStock ? `\n- (이후 ${liveImageBlocks.length}장) [교본 차트] '동일 날짜·동일 종목'의 교본(실전매매=강사 실제 매매) 차트다. 이 차트의 B(매수)/S(매도)는 강사의 실제 진입/청산이자 곧 정답매매(모범 답안)다 — 교본 차트엔 네모/동그라미(정답매매 표식)가 없고 강사 B/S 자체가 정답이다. 위 차트 판독 규칙 중 %주석·수평선·시간축 해석은 교본 차트에도 동일 적용하되, 내 매매일지 차트의 B/S와 교본 차트의 B/S(=정답)를 직접 비교하여 진입·청산 타이밍/가격 차이를 파악할 것. 교본 차트가 여러 장이면 각 차트 상단(HTS/MTS)에 인쇄된 종목명을 읽어 '${trade.stock}' 차트만 비교 대상으로 삼고, 종목명이 다른 차트는 무시할 것(종목명이 안 보이면 캔들 흐름이 이 매매와 맞는 것만 사용).` : `\n- 동일 날짜 실전매매 관련 이미지 ${liveImageBlocks.length}장`) : ""}\n이미지에서 실제로 확인 가능한 내용만 사용하고, 기법 설명과 무관하거나 불확실한 내용은 언급하지 말 것.`
         : `[첨부 이미지] 없음. 차트 기반 분석(봉 모양, 시간대 등)은 시도하지 말고 '차트 없음'으로만 명시할 것. 추측해서 지어내지 말 것.`;
 
-      const dayIdx = dayOfWeek(selected.date);
+      const dayIdx = dayOfWeek(trade.date);
       const dayLabel = dayIdx !== null ? `(${DAY_NAMES[dayIdx]})` : "";
-      const observe = isObserveTrade(selected);   // 관망(미진입): 실제 매수/매도 없음
+      const observe = isObserveTrade(trade);   // 관망(미진입): 실제 매수/매도 없음
 
       userContent.push({ type: "text", text:
         `[표기 규칙] 매매이유에서 괄호 안 숫자는 만원 단위임. 예: (+50)=+50만원 수익, (1000)=1000만원 매수금액, (-30)=-30만원 손실. "n만원"이라고 쓰지 않고 숫자만 씀.\n\n` +
-        `[현재 ${observe ? "관망(미진입)" : "매매"}] 종목:${selected.stock} 날짜:${selected.date}${dayLabel} 매수가:${selected.buyPrice || "-"} 매도가:${selected.sellPrice || "-"} 수익률:${selected.pnlRate || "-"}% 적용기법:${selected.technique || "미지정"}\n` +
+        `[현재 ${observe ? "관망(미진입)" : "매매"}] 종목:${trade.stock} 날짜:${trade.date}${dayLabel} 매수가:${trade.buyPrice || "-"} 매도가:${trade.sellPrice || "-"} 수익률:${trade.pnlRate || "-"}% 적용기법:${trade.technique || "미지정"}\n` +
         (observe ? `[관망 분석 지침] 이 기록은 실제로 진입하지 않고 지켜본 '관망(미진입)'이다. 매수가/매도가/수익률/손익이 없으므로 체결 손익·손절 실행을 논하지 말 것. 대신 (a)관망 판단이 강의록 기법·당일 상황에 비춰 옳았는지 (b)오히려 진입했어야 하는 자리였는지 (c)진입했다면 정답매매 시나리오가 무엇이었는지를 중점 분석하고, '개선할 점'은 진입/관망 의사결정 관점으로 쓸 것.\n` : "") +
-        `매매이유: ${selected.reason}\n${selected.memo ? `메모: ${selected.memo}\n` : ""}${siblingNote}\n` +
+        `매매이유: ${trade.reason}\n${trade.memo ? `메모: ${trade.memo}\n` : ""}${siblingNote}\n` +
         marketSection +
         `${imageNote}\n\n` +
         `[적용 기법 강의록 - 우선 참고]\n${techSummary || "(직접 매칭되는 강의록 없음)"}${techNote}\n\n` +
         `[기타 강의록 목록 - 위 기법에 없어도 이번 매매와 유사한 내용이 있는지 추가로 확인]\n${otherTechSummary || "(없음)"}\n\n` +
         `[실전 강의 레퍼런스 - 강사가 남긴 상세 실전 강의. 위 강의록과 동등하게 근거로 활용할 것]\n${lectureRefSection}\n\n` +
-        `[동일 날짜(${selected.date}) 실전매매 기록]\n${liveSection}\n\n` +
+        `[동일 날짜(${trade.date}) 실전매매 기록]\n${liveSection}\n\n` +
         (sameStockLiveNote ? `[동일 종목·동일 날짜 교본(실전매매) - B/S 비교 대상, 강사 실제 매매]\n${sameStockLiveNote}\n\n` : "") +
         `[과거 유사 매매 - 매매이유 원문]\n${pastTrades || "(없음)"}\n\n` +
         correctionsCtx +
@@ -1676,27 +1687,30 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
       const simMatch = result.match(/SIMILAR:\[([\d,\s]*)\]/);
       const lecMatch = result.match(/LECTURE:\s*(\d+)/);
       const analysisText = result.replace(/\n?LECTURE:\s*\d+\s*/g, '').replace(/\n?SIMILAR:\[[\d,\s]*\]\s*$/, '').trim();
-      setDetailAiAnalysis(analysisText);
-      setRecLectureId(lecMatch ? parseInt(lecMatch[1]) : null);
+      const recId = lecMatch ? parseInt(lecMatch[1]) : null;
       let sims;
       if (simMatch) {
         const ids = simMatch[1].split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
         sims = pastTradesArr.filter(t => ids.includes(t.id));
       } else {
-        sims = calcSimilarTrades(selected, trades);
+        sims = calcSimilarTrades(trade, trades);
       }
-      setSimilarTrades(sims);
-      analysisCacheRef.current[selected.id] = { text: analysisText, similarIds: sims.map(t => t.id), recLectureId: lecMatch ? parseInt(lecMatch[1]) : null };
-      // 분석 결과 자동 저장 (비용 든 결과 유실 방지) — 다른 매매로 이동해 있어도 원래 대상에만 반영.
-      // 추천 강의 ID는 숨김 마커로 함께 저장해 새로고침 후에도 추천 버튼이 복원되게 함.
+      if (isDetail) {   // 상세에서 호출된 경우에만 상세 화면 상태 갱신
+        setDetailAiAnalysis(analysisText);
+        setRecLectureId(recId);
+        setSimilarTrades(sims);
+        analysisCacheRef.current[trade.id] = { text: analysisText, similarIds: sims.map(t => t.id), recLectureId: recId };
+      }
+      // 분석 결과 저장 (추천 강의 ID는 숨김 마커로 함께). 배치는 저장 실패를 알려야 하므로 전파
+      const toSave = withLec(analysisText, recId);
       try {
-        const toSave = withLec(analysisText, lecMatch ? parseInt(lecMatch[1]) : null);
-        await sbPatch(selected.id, { ai_analysis: toSave });
-        setTrades(p => p.map(t => t.id === selected.id ? { ...t, aiAnalysis: toSave } : t));
-        setSelected(s => (s && s.id === selected.id ? { ...s, aiAnalysis: toSave } : s));
-      } catch {}
-    } catch (e) { setFeedback(`❌ ${e.message}`); }
-    setDetailAiLoading(false);
+        await sbPatch(trade.id, { ai_analysis: toSave });
+        setTrades(p => p.map(t => t.id === trade.id ? { ...t, aiAnalysis: toSave } : t));
+        if (isDetail) setSelected(s => (s && s.id === trade.id ? { ...s, aiAnalysis: toSave } : s));
+      } catch (e) { if (!isDetail) throw e; }
+      return { ok: true, recId };
+    } catch (e) { if (isDetail) setFeedback(`❌ ${e.message}`); return { ok: false, error: e.message }; }
+    finally { if (isDetail) setDetailAiLoading(false); }
   };
 
   const handleCorrection = async () => {
@@ -1885,6 +1899,58 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
     } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
 
+  // 선택 매매 각각을 단건 분석과 동일하게 순차 분석·저장 (배치)
+  const analyzeSelectedBatch = async () => {
+    const targets = [...selectedIds].map(id => trades.find(t => t.id === id)).filter(Boolean);
+    if (!targets.length) return;
+    setBatchState({ done: 0, total: targets.length });
+    let ok = 0, skip = 0, fail = 0;
+    for (let i = 0; i < targets.length; i++) {
+      const r = await analyzeDetailTrade(targets[i]);   // 인자 전달 → 배치 모드(상세 UI 미변경, DB 저장)
+      if (r?.ok) ok++; else if (r?.skipped) skip++; else fail++;
+      setBatchState({ done: i + 1, total: targets.length });
+    }
+    setBatchState(null);
+    setFeedback(`✅ 배치 분석 완료: 성공 ${ok}${skip ? ` / 이유없음 스킵 ${skip}` : ""}${fail ? ` / 실패 ${fail}` : ""}`);
+  };
+
+  // 선택 매매를 '같은 종목/테마의 날짜순 흐름'으로 묶어 한 번에 복기 (흐름 멀티분석)
+  const analyzeFlowSelected = async () => {
+    const targets = [...selectedIds].map(id => trades.find(t => t.id === id)).filter(Boolean)
+      .sort((a, b) => (a.date || "").localeCompare(b.date || "") || a.id - b.id);
+    if (targets.length < 2) { setFeedback("❌ 흐름분석은 2건 이상 선택하세요."); return; }
+    setFlowLoading(true); setFlowReport(null); setFeedback("");
+    try {
+      const techSummary = techniques.map((t, i) =>
+        `[ID:${t.id}] ${i < 51 ? `${i + 1}강 ` : ""}${t.name} / 카테고리:${t.category || "-"} / 매수조건:${t.entry?.condition || "-"} / 트리거:${t.pattern?.trigger || "-"} / 태그:${(t.tags || []).join(",") || "-"}`
+      ).join("\n");
+      const items = targets.map(t => {
+        const a = stripLec(t.aiAnalysis || "");
+        const obs = isObserveTrade(t);
+        return `[id:${t.id} | ${t.date} ${t.stock} ${t.technique || "-"} ${obs ? "관망(미진입)" : `수익률${t.pnlRate}%`}]${t.reason ? ` 이유:${t.reason.slice(0, 160)}` : ""}${a ? `\n  ▶기존 개별분석: ${a.slice(0, 500)}` : " (개별분석 없음 — 매매이유만)"}`;
+      }).join("\n\n");
+      const stocks = [...new Set(targets.map(t => t.stock).filter(Boolean))];
+      const prompt =
+        `아래는 사용자가 고른 ${targets.length}건의 매매다(날짜순). 개별 매매를 따로 채점하지 말고, 종목/테마를 관통하는 '시간순 흐름(스토리)'으로 복기하라.\n` +
+        `대상 종목: ${stocks.join(", ")}\n\n` +
+        `[선택 매매 — 날짜순]\n${items}\n\n` +
+        `[강의록 목록]\n${techSummary || "(없음)"}\n\n` +
+        `분석 방향(마크다운):\n` +
+        `## 1. 흐름 요약 (이 종목/테마에서 기간 동안 무슨 일이 있었고, 내 대응이 어떻게 전개됐는지)\n` +
+        `## 2. 포지션·판단 전개 (같은 종목이면 첫 진입→추가/청산→재진입의 일관성; 같은 테마 여러 종목이면 종목 선택·순환매 타이밍이 강의록 기법에 맞았는지)\n` +
+        `## 3. 흐름 속 반복 실수 / 잘한 점 (개별 매매를 [YYYY-MM-DD 종목명](t:ID) 링크로 인용)\n` +
+        `## 4. 다음에 같은 흐름을 만나면 — 체크리스트\n\n` +
+        `※ 응답 맨 끝에 다른 텍스트 없이 딱 한 줄: LECTURE:강의록ID  (이 흐름에 가장 필요한 강의 1개의 ID, 위 [강의록 목록]의 [ID:...] 중에서)`;
+      const result = await claude(
+        "주식 단기매매 흐름 복기 코치. 여러 매매를 시간순 스토리로 엮어 포지션 전개·판단 일관성·반복 실수를 도출한다. 반드시 제공된 실제 매매 데이터에 근거하고 날짜·종목을 인용한다.",
+        prompt, 6000, undefined, "claude-fable-5");
+      const lecMatch = result.match(/LECTURE:\s*(\d+)/);
+      const content = result.replace(/\n?LECTURE:\s*\d+\s*$/, "").trim();
+      setFlowReport({ content, recLectureId: lecMatch ? parseInt(lecMatch[1]) : null });
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+    setFlowLoading(false);
+  };
+
   const handlePermDelete = async (id) => {
     try {
       await sbDelete("trades", id);
@@ -1943,6 +2009,35 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
 
   return (
     <div>
+      {/* 흐름 멀티분석 결과 오버레이 */}
+      {flowReport && (
+        <div onClick={() => setFlowReport(null)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 200, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: isMobile ? 10 : 30, overflowY: "auto" }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: "#1a1d27", border: "1px solid #4f8ef7", borderRadius: 12, maxWidth: 760, width: "100%", padding: isMobile ? 16 : 24, marginTop: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
+              <span style={{ fontSize: 15, fontWeight: 700, color: "#8ee0a0" }}>🔗 선택 매매 흐름 복기</span>
+              <button onClick={() => setFlowReport(null)} style={{ marginLeft: "auto", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 6, cursor: "pointer", fontSize: 13, padding: "4px 12px" }}>닫기 ✕</button>
+            </div>
+            <div style={{ ...val14, background: "#12301a", border: "1px solid #2e7d32", whiteSpace: "normal", lineHeight: 1.7 }}>
+              <MD text={flowReport.content} onTradeLink={(id) => { const t = trades.find(x => x.id === id); if (t) { setFlowReport(null); openDetail(t); } }} />
+            </div>
+            {flowReport.recLectureId && (() => {
+              const rec = techniques.find(t => t.id === flowReport.recLectureId);
+              if (!rec) return null;
+              const li = techniques.findIndex(t => t.id === flowReport.recLectureId);
+              return (
+                <button onClick={() => { setFlowReport(null); onOpenLecture?.(flowReport.recLectureId); }}
+                  style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "9px 12px", background: "#12181a", border: "1px solid #2e7d32", borderRadius: 8, color: "#8ee0a0", cursor: "pointer", fontSize: 13, textAlign: "left" }}>
+                  <span style={{ fontSize: 15 }}>📚</span>
+                  <span style={{ fontWeight: 600 }}>추천 강의{li >= 0 && li < 51 ? ` ${li + 1}강` : ""}: {rec.name}</span>
+                  <span style={{ marginLeft: "auto", color: "#4caf50" }}>보러가기 →</span>
+                </button>
+              );
+            })()}
+          </div>
+        </div>
+      )}
       <div style={{ position: "sticky", top: isMobile ? 76 : 45, zIndex: 90, background: "#0f1117", paddingTop: 8, paddingBottom: 8, marginBottom: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         {[
           ["trades", `📋 매매 (${trades.length})`],
@@ -2411,18 +2506,26 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
           );
         };
 
+        const busy = !!batchState || flowLoading;
+        const sbtn = (on, bg) => ({ padding: "5px 12px", background: on ? bg : "#2a2d3a", color: on ? "#fff" : "#555", border: "none", borderRadius: 6, cursor: on ? "pointer" : "default", fontSize: 13, whiteSpace: "nowrap" });
         const SelectBar = selectMode ? (
-          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "#2a1a1a", borderRadius: 8, marginBottom: 10, border: "1px solid #e74c3c" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: "#161a24", borderRadius: 8, marginBottom: 10, border: "1px solid #4f8ef7", flexWrap: "wrap" }}>
             <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13, color: "#aaa" }}>
               <input type="checkbox" checked={allSelected} onChange={e => setSelectedIds(e.target.checked ? new Set(allFiltered.map(t => t.id)) : new Set())}
-                style={{ accentColor: "#e74c3c", width: 15, height: 15 }} />
+                style={{ accentColor: "#4f8ef7", width: 15, height: 15 }} />
               전체선택
             </label>
-            <span style={{ fontSize: 13, color: "#e74c3c", fontWeight: 600 }}>{selectedIds.size}개 선택됨</span>
-            <button onClick={handleBulkSoftDelete} disabled={selectedIds.size === 0}
-              style={{ padding: "5px 16px", background: selectedIds.size > 0 ? "#e74c3c" : "#3a1a1a", color: "#fff", border: "none", borderRadius: 6, cursor: selectedIds.size > 0 ? "pointer" : "default", fontSize: 13 }}>
-              🗑️ 선택 삭제
-            </button>
+            <span style={{ fontSize: 13, color: "#4f8ef7", fontWeight: 600 }}>{selectedIds.size}개 선택</span>
+            {batchState ? (
+              <span style={{ fontSize: 13, color: "#f39c12", fontWeight: 600 }}>🧠 분석 중… {batchState.done}/{batchState.total}</span>
+            ) : (
+              <>
+                <button onClick={analyzeSelectedBatch} disabled={selectedIds.size === 0 || busy} style={sbtn(selectedIds.size > 0 && !busy, "#8e44ad")}>🧠 선택 각각 분석</button>
+                <button onClick={analyzeFlowSelected} disabled={selectedIds.size < 2 || busy} style={sbtn(selectedIds.size >= 2 && !busy, "#2e7d32")}>{flowLoading ? "흐름분석 중…" : "🔗 흐름분석"}</button>
+              </>
+            )}
+            <span style={{ flex: 1 }} />
+            <button onClick={handleBulkSoftDelete} disabled={selectedIds.size === 0 || busy} style={sbtn(selectedIds.size > 0 && !busy, "#e74c3c")}>🗑️ 삭제</button>
           </div>
         ) : null;
 
@@ -2540,7 +2643,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
                     </>
                   ) : (
                     <>
-                      <button onClick={analyzeDetailTrade} disabled={detailAiLoading}
+                      <button onClick={() => analyzeDetailTrade()} disabled={detailAiLoading}
                         style={{ padding: "3px 12px", background: detailAiLoading ? "#333" : "#8e44ad", color: "#fff", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>
                         {detailAiLoading ? "분석 중..." : (detailAiAnalysis || selected.aiAnalysis) ? "재분석" : "분석 시작"}
                       </button>
@@ -3689,7 +3792,7 @@ function StatsTab() {
 
 // ==================== 메인 앱 ====================
 // ==================== 월간 복기 탭 ====================
-function MonthlyReviewTab({ techniques = [], onOpenTrade }) {
+function MonthlyReviewTab({ techniques = [], onOpenTrade, onOpenLecture }) {
   // 매매로 이동했다가 뒤로가기로 복귀하는 경우(reviewReturnScroll 플래그 존재)엔 보던 월을 그대로 복원, 그 외엔 이번 달
   const [month, setMonth] = useState(() => {
     try { if (sessionStorage.getItem("reviewReturnScroll") != null) return sessionStorage.getItem("reviewMonth") || new Date().toISOString().slice(0, 7); } catch {}
@@ -3812,12 +3915,16 @@ function MonthlyReviewTab({ techniques = [], onOpenTrade }) {
         `## 3. 강사도 진입 + 나도 실행 [그룹1] — 교본 대비 내 진입/청산이 어땠는지, 정답매매 vs 실제매매의 공통 갭(타이밍·손절·물량)\n` +
         `## 4. 강사 진입 + 나는 미실행 [그룹2] — 강사는 샀는데 나는 못/안 산 종목들. 왜 안 샀는지(관망 사유 포함)·진입 자리였는지·다음엔 무엇을 보고 잡을지\n` +
         `## 5. 강사 미진입 + 나만 단독 실행 [그룹3] — 강사 없이 독자 진입한 매매의 근거가 강의록에 부합했는지, 성과/리스크(무리한 진입은 아니었는지)\n` +
-        `## 6. 다음 달 개선 액션 (3~5개, 바로 실행 가능한 체크리스트로. 위 2번의 반복 실수를 직접 겨냥할 것)`;
+        `## 6. 다음 달 개선 액션 (3~5개, 바로 실행 가능한 체크리스트로. 위 2번의 반복 실수를 직접 겨냥할 것)\n\n` +
+        `※ 응답 맨 끝에 다른 텍스트 없이 딱 한 줄: LECTURE:id1,id2,id3  (이 달 복기상 다시 보면 가장 도움될 강의 최대 3개의 ID, 위 [강의록 목록]의 [ID:...] 중에서. 없으면 이 줄 생략)`;
 
       const result = await claude(
         "주식 단기매매 복기 코치. 한 달치 매매 데이터를 종합해 구체적이고 실행가능한 개선점을 도출한다. 반드시 제공된 실제 매매/강사 데이터에 근거하고, 날짜·종목을 인용하며, 근거 없는 일반론을 쓰지 않는다.",
         prompt, 8000, undefined, "claude-fable-5");
-      const rec = { content: result.trim(), at: new Date().toISOString() };
+      const lecMatch = result.match(/LECTURE:\s*([\d,\s]+)/);
+      const lecIds = lecMatch ? lecMatch[1].split(",").map(s => parseInt(s.trim())).filter(n => !isNaN(n)).slice(0, 3) : [];
+      const body = result.replace(/\n?LECTURE:\s*[\d,\s]+\s*$/, "").trim();
+      const rec = { content: withLecs(body, lecIds), at: new Date().toISOString() };
       saveReview(month, rec.content, rec.at); setSaved(rec);
       try { await sbSaveReview(month, rec.content); }   // 클라우드 동기화(기기 간 공유)
       catch { setFeedback("⚠️ 클라우드 저장 실패(로컬엔 저장됨). monthly_reviews 테이블 생성 SQL을 실행해 주세요."); }
@@ -3881,7 +3988,27 @@ function MonthlyReviewTab({ techniques = [], onOpenTrade }) {
                 <span style={{ fontSize: 13, fontWeight: 600, color: "#8e44ad" }}>🧠 {month} 월간 복기</span>
                 <span style={{ marginLeft: "auto", fontSize: 11, color: "#555" }}>생성 {new Date(saved.at).toLocaleString("ko-KR")}</span>
               </div>
-              <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad", whiteSpace: "normal", lineHeight: 1.7 }}><MD text={saved.content} onTradeLink={onOpenTrade} /></div>
+              <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad", whiteSpace: "normal", lineHeight: 1.7 }}><MD text={stripLecs(saved.content)} onTradeLink={onOpenTrade} /></div>
+              {(() => {
+                const ids = parseLecs(saved.content).map(id => techniques.find(t => t.id === id)).filter(Boolean);
+                if (!ids.length) return null;
+                return (
+                  <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+                    <div style={{ fontSize: 11, color: "#888" }}>📚 이 달 복습 추천 강의</div>
+                    {ids.map(rec => {
+                      const li = techniques.findIndex(t => t.id === rec.id);
+                      return (
+                        <button key={rec.id} onClick={() => onOpenLecture?.(rec.id)}
+                          style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "9px 12px", background: "#12301a", border: "1px solid #2e7d32", borderRadius: 8, color: "#8ee0a0", cursor: "pointer", fontSize: 13, textAlign: "left" }}>
+                          <span style={{ fontSize: 15 }}>📚</span>
+                          <span style={{ fontWeight: 600 }}>추천 강의{li >= 0 && li < 51 ? ` ${li + 1}강` : ""}: {rec.name}</span>
+                          <span style={{ marginLeft: "auto", color: "#4caf50" }}>보러가기 →</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
             </div>
           ) : !generating && (
             <div style={{ color: "#555", padding: 30, textAlign: "center", ...box }}>
@@ -3969,7 +4096,7 @@ export default function App() {
         {activeTab === 2 && <StatsTab />}
         {activeTab === 3 && <LectureTab pendingLecture={pendingLecture} onConsumed={() => setPendingLecture(null)} />}
         {activeTab === 4 && <RealTradeTab techniques={techniques} onOpenLecture={openLecture} />}
-        {activeTab === 5 && <MonthlyReviewTab techniques={techniques} onOpenTrade={openTrade} />}
+        {activeTab === 5 && <MonthlyReviewTab techniques={techniques} onOpenTrade={openTrade} onOpenLecture={openLecture} />}
       </div>
       {showScrollTop && (
         <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
