@@ -1116,7 +1116,7 @@ const stripLecs = (s) => (s ? s.replace(LECS_RE, "").trim() : s);
 const withLecs = (text, ids) => (ids && ids.length ? `${text}\n<!--LECS:${ids.join(",")}-->` : text);
 
 // ==================== 매매일지 탭 ====================
-function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeConsumed, onBgTask }) {
+function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeConsumed, onBg }) {
   const [trades, setTrades] = useState([]);
   const [recLectureId, setRecLectureId] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1579,7 +1579,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
     const trade = tradeArg || selected;   // 인자 없으면 상세의 selected, 있으면 배치 대상 매매
     const isDetail = !tradeArg;
     if (!trade?.reason) { if (isDetail) setFeedback("❌ 매매 이유를 먼저 입력하세요."); return { ok: false, skipped: true }; }
-    if (isDetail) { setDetailAiLoading(true); setDetailAiAnalysis(""); setAiEditMode(false); }
+    if (isDetail) { setDetailAiLoading(true); setDetailAiAnalysis(""); setAiEditMode(false); onBg?.("j-single", "매매 분석 중…"); }
     try {
       const chartImg = trade.chartImg ?? await sbGetChartImg(trade.id);   // 배치는 목록 데이터라 차트 미로드 → 개별 로딩
       // 1. 적용 기법과 관련된 강의록을 우선 선별하되, 나머지 강의록도 요약 형태로 함께 제공 (다른 강의록에 유사 내용이 있을 수 있음)
@@ -1764,7 +1764,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
       } catch (e) { if (!isDetail) throw e; }
       return { ok: true, recId };
     } catch (e) { if (isDetail) setFeedback(`❌ ${e.message}`); return { ok: false, error: e.message }; }
-    finally { if (isDetail) setDetailAiLoading(false); }
+    finally { if (isDetail) { setDetailAiLoading(false); onBg?.("j-single", null); } }
   };
 
   const handleCorrection = async () => {
@@ -1957,8 +1957,8 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
   const analyzeSelectedBatch = async () => {
     const targets = [...selectedIds].map(id => trades.find(t => t.id === id)).filter(Boolean);
     if (!targets.length) return;
-    // 로컬(SelectBar 표시) + App 배너(탭 이동해도 유지). onBgTask는 언마운트 후에도 호출되어 배너가 살아있음
-    const report = (done) => { setBatchState({ done, total: targets.length }); onBgTask?.({ kind: "batch", done, total: targets.length }); };
+    // 로컬(SelectBar 표시) + App 배너(탭 이동해도 유지). onBg는 언마운트 후에도 호출되어 배너가 살아있음
+    const report = (done) => { setBatchState({ done, total: targets.length }); onBg?.("batch", `선택 각각 분석 중… ${done}/${targets.length}`); };
     report(0);
     let ok = 0, skip = 0, fail = 0;
     for (let i = 0; i < targets.length; i++) {
@@ -1966,7 +1966,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
       if (r?.ok) ok++; else if (r?.skipped) skip++; else fail++;
       report(i + 1);
     }
-    setBatchState(null); onBgTask?.(null);
+    setBatchState(null); onBg?.("batch", null);
     setFeedback(`✅ 배치 분석 완료: 성공 ${ok}${skip ? ` / 이유없음 스킵 ${skip}` : ""}${fail ? ` / 실패 ${fail}` : ""}`);
   };
 
@@ -1975,7 +1975,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
     const targets = [...selectedIds].map(id => trades.find(t => t.id === id)).filter(Boolean)
       .sort((a, b) => (a.date || "").localeCompare(b.date || "") || a.id - b.id);
     if (targets.length < 2) { setFeedback("❌ 흐름분석은 2건 이상 선택하세요."); return; }
-    setFlowLoading(true); setFlowReport(null); setFeedback(""); onBgTask?.({ kind: "flow" });
+    setFlowLoading(true); setFlowReport(null); setFeedback(""); onBg?.("flow", "흐름분석 중…");
     try {
       const techSummary = techniques.map((t, i) =>
         `[ID:${t.id}] ${i < 51 ? `${i + 1}강 ` : ""}${t.name} / 카테고리:${t.category || "-"} / 매수조건:${t.entry?.condition || "-"} / 트리거:${t.pattern?.trigger || "-"} / 태그:${(t.tags || []).join(",") || "-"}`
@@ -2012,7 +2012,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
       catch { savedRow = { id: `local-${Date.now()}`, ...row }; setFeedback("⚠️ 클라우드 저장 실패(로컬 보관). flow_reviews 테이블 SQL을 실행해 주세요."); }
       setFlowReviews(p => { const next = [savedRow, ...p]; saveFlowCache(next); return next; });
     } catch (e) { setFeedback(`❌ ${e.message}`); }
-    setFlowLoading(false); onBgTask?.(null);
+    setFlowLoading(false); onBg?.("flow", null);
   };
 
   const openFlowReview = (r) => setFlowReport({ content: stripLec(r.content), recLectureId: parseLec(r.content) });
@@ -2079,7 +2079,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
 
   return (
     <div>
-      {/* 진행 배너는 App 최상위에서 렌더(탭 이동해도 유지) — onBgTask로 보고 */}
+      {/* 진행 배너는 App 최상위에서 렌더(탭 이동해도 유지) — onBg로 보고 */}
       {/* 흐름 멀티분석 결과 오버레이 */}
       {flowReport && (
         <div onClick={() => setFlowReport(null)}
@@ -3002,7 +3002,7 @@ function ImgGrid({ images, onRemove, onReorder, stockOpts, onTag }) {
 }
 
 // ==================== 실전매매 탭 ====================
-function RealTradeTab({ techniques = [], onOpenLecture }) {
+function RealTradeTab({ techniques = [], onOpenLecture, onBg }) {
   const [lTrades, setLTrades] = useState([]);
   const [recLectureId, setRecLectureId] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -3109,17 +3109,24 @@ function RealTradeTab({ techniques = [], onOpenLecture }) {
   };
 
   const generateSummary = async () => {
-    if (!selected?.textContent) { setFeedback("❌ 내용이 없습니다."); return; }
-    setSummaryLoading(true);
+    const target = selected;   // 요약 중 다른 항목으로 이동해도 원래 대상에 저장
+    if (!target?.textContent) { setFeedback("❌ 내용이 없습니다."); return; }
+    setSummaryLoading(true); onBg?.("l-summary", "실전매매 요약 중…");
     try {
       const result = await claude(
         "주식 실전매매 메시지 요약 전문가. 핵심 내용을 2-3문장으로 간결하게 요약.",
-        `다음 실전매매 카카오톡 메시지를 요약해주세요:\n\n${selected.textContent}`,
+        `다음 실전매매 카카오톡 메시지를 요약해주세요:\n\n${target.textContent}`,
         800, undefined, "claude-fable-5"
       );
-      setAiSummary(result.trim());
+      const summary = result.trim();
+      // 자동 저장(분석과 동일) — 화면 이동해도 유실 안 됨
+      try {
+        await sbPatchLive(target.id, { summary });
+        setLTrades(p => p.map(t => t.id === target.id ? { ...t, summary } : t));
+        setSelected(s => (s && s.id === target.id ? { ...s, summary } : s));
+      } catch (e) { setAiSummary(summary); setFeedback(`⚠️ 요약 저장 실패(임시 표시): ${e.message}`); }
     } catch (e) { setFeedback(`❌ ${e.message}`); }
-    setSummaryLoading(false);
+    setSummaryLoading(false); onBg?.("l-summary", null);
   };
 
   const saveSummary = async () => {
@@ -3210,7 +3217,7 @@ function RealTradeTab({ techniques = [], onOpenLecture }) {
     const target = selected; // 분석 중 다른 종목으로 이동/이탈해도 원래 대상에 저장
     if (!target?.textContent) { setFeedback("❌ 내용이 없습니다."); return; }
     const isLecture = target.category === "강의";   // 강의(교육) 항목은 매매 B/S가 아닌 '강의 요점 정리'로 분석
-    setAiLoading(true); setAiAnalysis("");
+    setAiLoading(true); setAiAnalysis(""); onBg?.("l-single", isLecture ? "강의 정리 중…" : "실전매매 분석 중…");
     try {
       const pastArr = lTrades.filter(t => t.id !== target.id && t.textContent).slice(0, 10);
       const pastText = pastArr.map(t => `[ID:${t.id}] ${t.stock}(${t.date}): ${(t.textContent || "").slice(0, 80)}`).join('\n');
@@ -3283,7 +3290,7 @@ function RealTradeTab({ techniques = [], onOpenLecture }) {
           : calcSimilar(target, lTrades);
       setSimilarTrades(sims);
     } catch (e) { setFeedback(`❌ ${e.message}`); }
-    setAiLoading(false);
+    setAiLoading(false); onBg?.("l-single", null);
   };
 
   const iStyle = { width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box" };
@@ -3904,7 +3911,7 @@ function StatsTab() {
 
 // ==================== 메인 앱 ====================
 // ==================== 월간 복기 탭 ====================
-function MonthlyReviewTab({ techniques = [], onOpenTrade, onOpenLecture }) {
+function MonthlyReviewTab({ techniques = [], onOpenTrade, onOpenLecture, onBg }) {
   // 매매로 이동했다가 뒤로가기로 복귀하는 경우(reviewReturnScroll 플래그 존재)엔 보던 월을 그대로 복원, 그 외엔 이번 달
   const [month, setMonth] = useState(() => {
     try { if (sessionStorage.getItem("reviewReturnScroll") != null) return sessionStorage.getItem("reviewMonth") || new Date().toISOString().slice(0, 7); } catch {}
@@ -3994,7 +4001,7 @@ function MonthlyReviewTab({ techniques = [], onOpenTrade, onOpenLecture }) {
 
   const generate = async () => {
     if (!monthTrades.length && !monthLives.length) { setFeedback("❌ 이번 달 데이터가 없습니다."); return; }
-    setGenerating(true); setFeedback("");
+    setGenerating(true); setFeedback(""); onBg?.("monthly", `${month} 월간복기 생성 중…`);
     try {
       // 기법별 요약
       const byTech = {};
@@ -4047,7 +4054,7 @@ function MonthlyReviewTab({ techniques = [], onOpenTrade, onOpenLecture }) {
       try { await sbSaveReview(month, rec.content); }   // 클라우드 동기화(기기 간 공유)
       catch { setFeedback("⚠️ 클라우드 저장 실패(로컬엔 저장됨). monthly_reviews 테이블 생성 SQL을 실행해 주세요."); }
     } catch (e) { setFeedback(`❌ ${e.message}`); }
-    setGenerating(false);
+    setGenerating(false); onBg?.("monthly", null);
   };
 
   const btn = (extra) => ({ padding: "6px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, ...extra });
@@ -4156,7 +4163,8 @@ export default function App() {
   const [pendingLecture, setPendingLecture] = useState(null);
   const [pendingTradeId, setPendingTradeId] = useState(null);
   const [showScrollTop, setShowScrollTop] = useState(false);
-  const [bgTask, setBgTask] = useState(null);   // 배치/흐름분석 진행 배너(탭 이동해도 유지되도록 App 최상위 보관)
+  const [bgTasks, setBgTasks] = useState({});   // 진행 중 분석 작업들 {id: 문구} - 탭 이동해도 유지(App 최상위)
+  const setBg = useCallback((id, text) => setBgTasks(p => { const n = { ...p }; if (text) n[id] = text; else delete n[id]; return n; }), []);
   const isMobile = useIsMobile();
 
   // 강의록으로 크로스탭 이동 (매매일지 분석의 추천 강의 버튼 등)
@@ -4222,11 +4230,11 @@ export default function App() {
       </div>
       <div style={{ padding: isMobile ? 12 : 20, maxWidth: 960, margin: "0 auto" }}>
         {activeTab === 0 && <DashboardTab onNavigate={handleTabChange} />}
-        {activeTab === 1 && <JournalTab techniques={techniques} onOpenLecture={openLecture} pendingTradeId={pendingTradeId} onPendingTradeConsumed={() => setPendingTradeId(null)} onBgTask={setBgTask} />}
+        {activeTab === 1 && <JournalTab techniques={techniques} onOpenLecture={openLecture} pendingTradeId={pendingTradeId} onPendingTradeConsumed={() => setPendingTradeId(null)} onBg={setBg} />}
         {activeTab === 2 && <StatsTab />}
         {activeTab === 3 && <LectureTab pendingLecture={pendingLecture} onConsumed={() => setPendingLecture(null)} />}
-        {activeTab === 4 && <RealTradeTab techniques={techniques} onOpenLecture={openLecture} />}
-        {activeTab === 5 && <MonthlyReviewTab techniques={techniques} onOpenTrade={openTrade} onOpenLecture={openLecture} />}
+        {activeTab === 4 && <RealTradeTab techniques={techniques} onOpenLecture={openLecture} onBg={setBg} />}
+        {activeTab === 5 && <MonthlyReviewTab techniques={techniques} onOpenTrade={openTrade} onOpenLecture={openLecture} onBg={setBg} />}
       </div>
       {showScrollTop && (
         <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
@@ -4235,14 +4243,15 @@ export default function App() {
           ↑
         </button>
       )}
-      {/* 배치/흐름분석 진행 배너 - App 최상위라 어느 탭에서도 유지. 뷰포트 우측 하단 고정 */}
-      {bgTask && (
-        <div style={{ position: "fixed", right: 12, bottom: 74, zIndex: 200, maxWidth: "min(90vw, 300px)", boxSizing: "border-box", background: "#161a24", border: "1px solid #8e44ad", borderRadius: 12, padding: "9px 14px", boxShadow: "0 4px 16px rgba(0,0,0,0.5)", display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#d6b8f0", lineHeight: 1.4 }}>
-          <span style={{ fontSize: 16, flexShrink: 0 }}>🧠</span>
-          <span>
-            {bgTask.kind === "batch" ? `선택 각각 분석 중… ${bgTask.done}/${bgTask.total}` : "흐름분석 중…"}
-            <span style={{ color: "#8a8a9a" }}> · 자동 저장(탭 이동해도 계속)</span>
-          </span>
+      {/* 진행 중 분석 배너 - App 최상위라 어느 탭에서도 유지. 뷰포트 우측 하단 고정, 여러 작업 동시 표시 */}
+      {Object.keys(bgTasks).length > 0 && (
+        <div style={{ position: "fixed", right: 12, bottom: 74, zIndex: 200, maxWidth: "min(90vw, 320px)", boxSizing: "border-box", background: "#161a24", border: "1px solid #8e44ad", borderRadius: 12, padding: "9px 14px", boxShadow: "0 4px 16px rgba(0,0,0,0.5)", display: "flex", flexDirection: "column", gap: 6, fontSize: 12.5, color: "#d6b8f0", lineHeight: 1.4 }}>
+          {Object.entries(bgTasks).map(([id, text]) => (
+            <div key={id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 15, flexShrink: 0 }}>🧠</span>
+              <span>{text}<span style={{ color: "#8a8a9a" }}> · 자동 저장(이동해도 계속)</span></span>
+            </div>
+          ))}
         </div>
       )}
     </div>
