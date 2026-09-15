@@ -1116,7 +1116,7 @@ const stripLecs = (s) => (s ? s.replace(LECS_RE, "").trim() : s);
 const withLecs = (text, ids) => (ids && ids.length ? `${text}\n<!--LECS:${ids.join(",")}-->` : text);
 
 // ==================== 매매일지 탭 ====================
-function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeConsumed }) {
+function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeConsumed, onBgTask }) {
   const [trades, setTrades] = useState([]);
   const [recLectureId, setRecLectureId] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1957,14 +1957,16 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
   const analyzeSelectedBatch = async () => {
     const targets = [...selectedIds].map(id => trades.find(t => t.id === id)).filter(Boolean);
     if (!targets.length) return;
-    setBatchState({ done: 0, total: targets.length });
+    // 로컬(SelectBar 표시) + App 배너(탭 이동해도 유지). onBgTask는 언마운트 후에도 호출되어 배너가 살아있음
+    const report = (done) => { setBatchState({ done, total: targets.length }); onBgTask?.({ kind: "batch", done, total: targets.length }); };
+    report(0);
     let ok = 0, skip = 0, fail = 0;
     for (let i = 0; i < targets.length; i++) {
       const r = await analyzeDetailTrade(targets[i]);   // 인자 전달 → 배치 모드(상세 UI 미변경, DB 저장)
       if (r?.ok) ok++; else if (r?.skipped) skip++; else fail++;
-      setBatchState({ done: i + 1, total: targets.length });
+      report(i + 1);
     }
-    setBatchState(null);
+    setBatchState(null); onBgTask?.(null);
     setFeedback(`✅ 배치 분석 완료: 성공 ${ok}${skip ? ` / 이유없음 스킵 ${skip}` : ""}${fail ? ` / 실패 ${fail}` : ""}`);
   };
 
@@ -1973,7 +1975,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
     const targets = [...selectedIds].map(id => trades.find(t => t.id === id)).filter(Boolean)
       .sort((a, b) => (a.date || "").localeCompare(b.date || "") || a.id - b.id);
     if (targets.length < 2) { setFeedback("❌ 흐름분석은 2건 이상 선택하세요."); return; }
-    setFlowLoading(true); setFlowReport(null); setFeedback("");
+    setFlowLoading(true); setFlowReport(null); setFeedback(""); onBgTask?.({ kind: "flow" });
     try {
       const techSummary = techniques.map((t, i) =>
         `[ID:${t.id}] ${i < 51 ? `${i + 1}강 ` : ""}${t.name} / 카테고리:${t.category || "-"} / 매수조건:${t.entry?.condition || "-"} / 트리거:${t.pattern?.trigger || "-"} / 태그:${(t.tags || []).join(",") || "-"}`
@@ -2010,7 +2012,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
       catch { savedRow = { id: `local-${Date.now()}`, ...row }; setFeedback("⚠️ 클라우드 저장 실패(로컬 보관). flow_reviews 테이블 SQL을 실행해 주세요."); }
       setFlowReviews(p => { const next = [savedRow, ...p]; saveFlowCache(next); return next; });
     } catch (e) { setFeedback(`❌ ${e.message}`); }
-    setFlowLoading(false);
+    setFlowLoading(false); onBgTask?.(null);
   };
 
   const openFlowReview = (r) => setFlowReport({ content: stripLec(r.content), recLectureId: parseLec(r.content) });
@@ -2077,16 +2079,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
 
   return (
     <div>
-      {/* 배치/흐름분석 진행 배너 - 뷰포트 우측 하단 고정. 화면이 줄어도 항상 보이고 안 잘림(최대폭 제한+줄바꿈) */}
-      {(batchState || flowLoading) && (
-        <div style={{ position: "fixed", right: 12, bottom: 74, zIndex: 200, maxWidth: "min(90vw, 300px)", boxSizing: "border-box", background: "#161a24", border: "1px solid #8e44ad", borderRadius: 12, padding: "9px 14px", boxShadow: "0 4px 16px rgba(0,0,0,0.5)", display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#d6b8f0", lineHeight: 1.4 }}>
-          <span style={{ fontSize: 16, flexShrink: 0 }}>🧠</span>
-          <span>
-            {batchState ? `선택 각각 분석 중… ${batchState.done}/${batchState.total}` : "흐름분석 중…"}
-            <span style={{ color: "#8a8a9a" }}> · 자동 저장(이동해도 계속)</span>
-          </span>
-        </div>
-      )}
+      {/* 진행 배너는 App 최상위에서 렌더(탭 이동해도 유지) — onBgTask로 보고 */}
       {/* 흐름 멀티분석 결과 오버레이 */}
       {flowReport && (
         <div onClick={() => setFlowReport(null)}
@@ -4159,6 +4152,7 @@ export default function App() {
   const [pendingLecture, setPendingLecture] = useState(null);
   const [pendingTradeId, setPendingTradeId] = useState(null);
   const [showScrollTop, setShowScrollTop] = useState(false);
+  const [bgTask, setBgTask] = useState(null);   // 배치/흐름분석 진행 배너(탭 이동해도 유지되도록 App 최상위 보관)
   const isMobile = useIsMobile();
 
   // 강의록으로 크로스탭 이동 (매매일지 분석의 추천 강의 버튼 등)
@@ -4224,7 +4218,7 @@ export default function App() {
       </div>
       <div style={{ padding: isMobile ? 12 : 20, maxWidth: 960, margin: "0 auto" }}>
         {activeTab === 0 && <DashboardTab onNavigate={handleTabChange} />}
-        {activeTab === 1 && <JournalTab techniques={techniques} onOpenLecture={openLecture} pendingTradeId={pendingTradeId} onPendingTradeConsumed={() => setPendingTradeId(null)} />}
+        {activeTab === 1 && <JournalTab techniques={techniques} onOpenLecture={openLecture} pendingTradeId={pendingTradeId} onPendingTradeConsumed={() => setPendingTradeId(null)} onBgTask={setBgTask} />}
         {activeTab === 2 && <StatsTab />}
         {activeTab === 3 && <LectureTab pendingLecture={pendingLecture} onConsumed={() => setPendingLecture(null)} />}
         {activeTab === 4 && <RealTradeTab techniques={techniques} onOpenLecture={openLecture} />}
@@ -4236,6 +4230,16 @@ export default function App() {
           style={{ position: "fixed", right: 20, bottom: 20, width: 44, height: 44, borderRadius: "50%", background: "#4f8ef7", color: "#fff", border: "none", cursor: "pointer", fontSize: 18, boxShadow: "0 2px 8px rgba(0,0,0,0.4)", zIndex: 150 }}>
           ↑
         </button>
+      )}
+      {/* 배치/흐름분석 진행 배너 - App 최상위라 어느 탭에서도 유지. 뷰포트 우측 하단 고정 */}
+      {bgTask && (
+        <div style={{ position: "fixed", right: 12, bottom: 74, zIndex: 200, maxWidth: "min(90vw, 300px)", boxSizing: "border-box", background: "#161a24", border: "1px solid #8e44ad", borderRadius: 12, padding: "9px 14px", boxShadow: "0 4px 16px rgba(0,0,0,0.5)", display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#d6b8f0", lineHeight: 1.4 }}>
+          <span style={{ fontSize: 16, flexShrink: 0 }}>🧠</span>
+          <span>
+            {bgTask.kind === "batch" ? `선택 각각 분석 중… ${bgTask.done}/${bgTask.total}` : "흐름분석 중…"}
+            <span style={{ color: "#8a8a9a" }}> · 자동 저장(탭 이동해도 계속)</span>
+          </span>
+        </div>
       )}
     </div>
   );
