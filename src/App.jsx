@@ -368,7 +368,20 @@ const claude = async (system, userContent, maxTokens = 1000, temperature, model 
       } catch (e) { throw new Error(`네트워크 오류 (CORS/연결): ${e.message}`); }
       if (res.ok) {
         const data = await res.json();
-        return data.content?.map(b => b.text || "").join("") || "";
+        const text = data.content?.map(b => b.text || "").join("") || "";
+        if (text.trim()) return text;
+        // 빈 응답: 첨부 이미지가 안전분류기 오탐(stop_reason:refusal)을 일으킨 경우 → 이미지 빼고 텍스트만으로 1회 재시도
+        if (Array.isArray(userContent) && userContent.some(b => b.type === "image")) {
+          const textOnly = userContent.filter(b => b.type !== "image");
+          const rbody = JSON.stringify({ model: mdl, max_tokens: maxTokens, system: (system ? system + "\n" : "") + "(참고: 첨부 이미지는 처리 불가로 제외됨. 텍스트만으로 분석하고, 차트/이미지 기반 항목은 '이미지 없음'으로 명시.)", messages: [{ role: "user", content: textOnly }], ...(temperature !== undefined ? { temperature } : {}) });
+          try {
+            const r2 = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body: rbody });
+            if (r2.ok) { const d2 = await r2.json(); const t2 = d2.content?.map(b => b.text || "").join("") || ""; if (t2.trim()) return t2; }
+          } catch {}
+        }
+        throw new Error(data.stop_reason === "refusal"
+          ? "모델이 응답을 거부했습니다(refusal). 첨부 이미지가 원인일 수 있어 이미지를 빼고 재시도했으나 실패 — 이미지를 교체하거나 텍스트만으로 시도해 주세요."
+          : "빈 응답을 받았습니다. 잠시 후 다시 시도해 주세요.");
       }
       if (RETRYABLE.has(res.status) && attempt < 2) {
         const wait = res.status === 529 ? 8000 : 4000;
@@ -3202,6 +3215,7 @@ function RealTradeTab({ techniques = [], onOpenLecture }) {
   const analyzeDetail = async () => {
     const target = selected; // 분석 중 다른 종목으로 이동/이탈해도 원래 대상에 저장
     if (!target?.textContent) { setFeedback("❌ 내용이 없습니다."); return; }
+    const isLecture = target.category === "강의";   // 강의(교육) 항목은 매매 B/S가 아닌 '강의 요점 정리'로 분석
     setAiLoading(true); setAiAnalysis("");
     try {
       const pastArr = lTrades.filter(t => t.id !== target.id && t.textContent).slice(0, 10);
@@ -3225,22 +3239,34 @@ function RealTradeTab({ techniques = [], onOpenLecture }) {
         : `[첨부 차트 이미지] 없음. 차트/B/S 기반 분석은 하지 말고 당일 카톡 텍스트만으로 분석할 것.`;
       const content = [];
       imgs.slice(0, 4).forEach(im => content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: im.d } }));
-      content.push({ type: "text", text:
-        `[현재 실전매매(강사 교본)]\n종목:${target.stock} 날짜:${target.date}\n당일 카톡 원문:\n${target.textContent}\n\n` +
-        `${chartNote}\n\n` +
-        `[강의록DB - 기본 지식. 이 매매에 가장 부합하는 기법을 근거로 활용]\n${techSummary || "(없음)"}\n\n` +
-        `[과거 실전매매 참고]\n${pastText || "(없음)"}\n\n` +
-        `아래 항목을 분석 (반드시 [강의록DB]와 당일 카톡을 기본 지식으로 삼을 것):\n` +
-        `1. 매매 의도 및 전략 (당일 카톡 근거)\n` +
-        `2. 차트 B/S 분석: 첨부 차트의 B(매수)/S(매도)는 강사의 정답매매다. 이를 강의록 기법 기준으로 분석 — 진입/청산 타이밍이 기법의 트리거·패턴·주의사항과 부합하는지 강의록 근거를 인용. 당일 카톡에서 강사가 밝힌 진입/청산 이유와 차트 B/S를 연결해 설명 (차트가 없으면 이 항목 생략)\n` +
-        `3. 강의록 기법과의 연관성 (가장 부합하는 기법 1개와 그 근거)\n` +
-        `4. 핵심 판단 근거 / 과거 유사 매매와 비교\n\n` +
-        `※ 응답 맨 끝에 아래 두 줄을 순서대로, 다른 텍스트 없이 정확히 이 형식으로만 출력:\n` +
-        `LECTURE:강의록ID  (이번 매매 상황에 가장 적합한 강의록 1개의 ID. 위 [강의록DB]의 [ID:...] 중에서 딱 하나만 고를 것. 적합한 것이 없으면 이 줄 생략)\n` +
-        `SIMILAR:[id1,id2,...]  (과거 유사 매매 중 가장 유사한 것 최대 5개의 ID)`
+      const lessonImgNote = imgs.length ? `[첨부 이미지 ${imgs.length}장] 강의 자료(차트 예시·슬라이드·캡처). 참고하되 실제로 보이는 것만 쓰고 없는 내용을 지어내지 말 것.\n\n` : "";
+      content.push({ type: "text", text: isLecture
+        ? (`[강의(교육) 자료]\n제목:${target.title || "-"}${target.date ? ` (${target.date})` : ""}\n원문:\n${target.textContent}\n\n` +
+           lessonImgNote +
+           `[강의록DB]\n${techSummary || "(없음)"}\n\n` +
+           `위 강의 내용을 아래로 구조화(마크다운). 강의에 실제로 담긴 내용만 근거로 하고, 없는 내용을 일반론으로 지어내지 말 것:\n` +
+           `## 1. 핵심 요점 — 이 강의가 말하는 원칙·기준(수치·조건 포함)\n` +
+           `## 2. 실전 적용법 — 어떤 상황에서 어떻게 쓰는지\n` +
+           `## 3. 주의사항 / 흔한 실수\n` +
+           `## 4. 관련 강의록 기법과의 연결\n\n` +
+           `※ 응답 맨 끝에 다른 텍스트 없이 딱 한 줄: LECTURE:강의록ID  (이 강의와 가장 관련된 강의록 1개의 ID, 위 [강의록DB]의 [ID:...] 중에서. 없으면 생략)`)
+        : (`[현재 실전매매(강사 교본)]\n종목:${target.stock} 날짜:${target.date}\n당일 카톡 원문:\n${target.textContent}\n\n` +
+           `${chartNote}\n\n` +
+           `[강의록DB - 기본 지식. 이 매매에 가장 부합하는 기법을 근거로 활용]\n${techSummary || "(없음)"}\n\n` +
+           `[과거 실전매매 참고]\n${pastText || "(없음)"}\n\n` +
+           `아래 항목을 분석 (반드시 [강의록DB]와 당일 카톡을 기본 지식으로 삼을 것):\n` +
+           `1. 매매 의도 및 전략 (당일 카톡 근거)\n` +
+           `2. 차트 B/S 분석: 첨부 차트의 B(매수)/S(매도)는 강사의 정답매매다. 이를 강의록 기법 기준으로 분석 — 진입/청산 타이밍이 기법의 트리거·패턴·주의사항과 부합하는지 강의록 근거를 인용. 당일 카톡에서 강사가 밝힌 진입/청산 이유와 차트 B/S를 연결해 설명 (차트가 없으면 이 항목 생략)\n` +
+           `3. 강의록 기법과의 연관성 (가장 부합하는 기법 1개와 그 근거)\n` +
+           `4. 핵심 판단 근거 / 과거 유사 매매와 비교\n\n` +
+           `※ 응답 맨 끝에 아래 두 줄을 순서대로, 다른 텍스트 없이 정확히 이 형식으로만 출력:\n` +
+           `LECTURE:강의록ID  (이번 매매 상황에 가장 적합한 강의록 1개의 ID. 위 [강의록DB]의 [ID:...] 중에서 딱 하나만 고를 것. 적합한 것이 없으면 이 줄 생략)\n` +
+           `SIMILAR:[id1,id2,...]  (과거 유사 매매 중 가장 유사한 것 최대 5개의 ID)`)
       });
       const result = await claude(
-        "주식 실전매매 분석 전문가. 강사(교본)의 카카오톡 매매 메시지와 차트의 B/S를 강의록 기법에 근거해 분석한다. 강의록에 없는 내용을 일반론으로 단정하지 않고, 차트에서 실제로 보이는 것만 사용한다.",
+        isLecture
+          ? "주식 매매 강의(교육) 정리 전문가. 강사가 남긴 강의/원칙 메시지를 핵심 원칙·기준·적용법·주의사항으로 구조화하고 관련 강의록 기법과 연결한다. 강의에 없는 내용을 일반론으로 지어내지 않는다."
+          : "주식 실전매매 분석 전문가. 강사(교본)의 카카오톡 매매 메시지와 차트의 B/S를 강의록 기법에 근거해 분석한다. 강의록에 없는 내용을 일반론으로 단정하지 않고, 차트에서 실제로 보이는 것만 사용한다.",
         content, 8000, undefined, "claude-fable-5"
       );
       const simMatch = result.match(/SIMILAR:\[([\d,\s]*)\]/);
@@ -3257,9 +3283,10 @@ function RealTradeTab({ techniques = [], onOpenLecture }) {
         setSelected(s => (s && s.id === target.id ? { ...s, aiAnalysis: toSave } : s));
       } catch (e) { setFeedback(`⚠️ 저장 실패(분석은 완료): ${e.message}`); }
       setAiAnalysis(""); // 저장됨 섹션으로 표시되므로 임시 상태 비움
-      const sims = simMatch
-        ? pastArr.filter(t => { const ids = simMatch[1].split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n)); return ids.includes(t.id); })
-        : calcSimilar(target, lTrades);
+      const sims = isLecture ? []
+        : simMatch
+          ? pastArr.filter(t => { const ids = simMatch[1].split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n)); return ids.includes(t.id); })
+          : calcSimilar(target, lTrades);
       setSimilarTrades(sims);
     } catch (e) { setFeedback(`❌ ${e.message}`); }
     setAiLoading(false);
