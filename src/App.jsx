@@ -2077,13 +2077,14 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
 
   return (
     <div>
-      {/* 배치/흐름분석 진행 배너 - 어느 화면에서나 보이고, 완료분은 자동 저장되어 이동해도 계속됨 */}
+      {/* 배치/흐름분석 진행 배너 - 뷰포트 우측 하단 고정. 화면이 줄어도 항상 보이고 안 잘림(최대폭 제한+줄바꿈) */}
       {(batchState || flowLoading) && (
-        <div style={{ position: "fixed", top: isMobile ? 70 : 52, left: "50%", transform: "translateX(-50%)", zIndex: 190, background: "#161a24", border: "1px solid #8e44ad", borderRadius: 20, padding: "6px 16px", boxShadow: "0 2px 12px rgba(0,0,0,0.45)", display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#d6b8f0", whiteSpace: "nowrap", maxWidth: "92vw", overflow: "hidden" }}>
-          <span>🧠</span>
-          {batchState
-            ? `선택 각각 분석 중… ${batchState.done}/${batchState.total} · 완료분 자동 저장(이동해도 계속)`
-            : "흐름분석 중… 완료되면 자동 저장"}
+        <div style={{ position: "fixed", right: 12, bottom: 74, zIndex: 200, maxWidth: "min(90vw, 300px)", boxSizing: "border-box", background: "#161a24", border: "1px solid #8e44ad", borderRadius: 12, padding: "9px 14px", boxShadow: "0 4px 16px rgba(0,0,0,0.5)", display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#d6b8f0", lineHeight: 1.4 }}>
+          <span style={{ fontSize: 16, flexShrink: 0 }}>🧠</span>
+          <span>
+            {batchState ? `선택 각각 분석 중… ${batchState.done}/${batchState.total}` : "흐름분석 중…"}
+            <span style={{ color: "#8a8a9a" }}> · 자동 저장(이동해도 계속)</span>
+          </span>
         </div>
       )}
       {/* 흐름 멀티분석 결과 오버레이 */}
