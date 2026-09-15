@@ -4014,7 +4014,7 @@ function MonthlyReviewTab({ techniques = [], onOpenTrade, onOpenLecture }) {
         const mine = p.obs ? `내 기록=관망(id:${p.obs.id})${p.obs.reason ? ` 이유:${p.obs.reason.slice(0, 90)}` : ""}` : "내 기록=없음";
         return `- ${p.date} ${p.stock}${p.live.title ? ` (${p.live.title})` : ""} | ${mine}\n  강사카톡:${(p.live.textContent || "").replace(/\s+/g, " ").slice(0, 200)}`;
       }).join("\n") : "(없음 — 강사가 진입한 종목은 모두 나도 실행함)";
-      const techNames = techniques.map((t, i) => `${i + 1}강 ${t.name}`).join(", ");
+      const techNames = techniques.map((t, i) => `[ID:${t.id}]${i < 51 ? ` ${i + 1}강` : ""} ${t.name}`).join("\n");
 
       const prompt =
         `[이번 달: ${month}] 실행 매매 ${executedN}건 + 관망(미진입) ${observeN}건 = 기록 ${monthTrades.length}건, 채점가능 ${scored.length}건, 승률 ${rawWinRate}%, 보정승률(원칙손절 반영) ${adjWinRate}%, 총손익 ${totalPnl.toLocaleString()}원(괄호숫자=만원)\n` +
@@ -4034,7 +4034,7 @@ function MonthlyReviewTab({ techniques = [], onOpenTrade, onOpenLecture }) {
         `## 4. 강사 진입 + 나는 미실행 [그룹2] — 강사는 샀는데 나는 못/안 산 종목들. 왜 안 샀는지(관망 사유 포함)·진입 자리였는지·다음엔 무엇을 보고 잡을지\n` +
         `## 5. 강사 미진입 + 나만 단독 실행 [그룹3] — 강사 없이 독자 진입한 매매의 근거가 강의록에 부합했는지, 성과/리스크(무리한 진입은 아니었는지)\n` +
         `## 6. 다음 달 개선 액션 (3~5개, 바로 실행 가능한 체크리스트로. 위 2번의 반복 실수를 직접 겨냥할 것)\n\n` +
-        `※ 응답 맨 끝에 다른 텍스트 없이 딱 한 줄: LECTURE:id1,id2,id3  (이 달 복기상 다시 보면 가장 도움될 강의 최대 3개의 ID, 위 [강의록 목록]의 [ID:...] 중에서. 없으면 이 줄 생략)`;
+        `※ 응답 맨 끝에 다른 텍스트 없이 딱 한 줄: LECTURE:id1,id2,id3  (이 달 복기상 다시 보면 가장 도움될 강의 최대 3개. 반드시 위 [강의록 목록]의 [ID:...] 안 숫자를 그대로 쓸 것 — '강 번호'가 아니라 ID값. 없으면 이 줄 생략)`;
 
       const result = await claude(
         "주식 단기매매 복기 코치. 한 달치 매매 데이터를 종합해 구체적이고 실행가능한 개선점을 도출한다. 반드시 제공된 실제 매매/강사 데이터에 근거하고, 날짜·종목을 인용하며, 근거 없는 일반론을 쓰지 않는다.",
@@ -4115,7 +4115,11 @@ function MonthlyReviewTab({ techniques = [], onOpenTrade, onOpenLecture }) {
               </div>
               <div style={{ ...val14, background: "#1a1330", border: "1px solid #8e44ad", whiteSpace: "normal", lineHeight: 1.7 }}><MD text={stripLecs(saved.content)} onTradeLink={onOpenTrade} /></div>
               {(() => {
-                const ids = parseLecs(saved.content).map(id => techniques.find(t => t.id === id)).filter(Boolean);
+                // 마커값이 DB id면 그대로, 작은 수면 '강 번호'(index+1)로 해석 — 기존 리포트(강번호 저장) 호환
+                const seen = new Set();
+                const ids = parseLecs(saved.content)
+                  .map(id => techniques.find(t => t.id === id) || (id >= 1 && id <= techniques.length ? techniques[id - 1] : null))
+                  .filter(t => t && !seen.has(t.id) && seen.add(t.id));
                 if (!ids.length) return null;
                 return (
                   <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
