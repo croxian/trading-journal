@@ -898,7 +898,7 @@ function LectureTab({ pendingLecture, onConsumed }) {
     if (!input.trim()) return;
     setSaving(true); setFeedback("");
     try {
-      const raw = await claude(LECTURE_SYSTEM, input, 4000, undefined, "claude-fable-5");
+      const raw = await claude(LECTURE_SYSTEM, input, 16000, undefined, "claude-fable-5");
       const parsed = await parseJSON(raw);
       parsed.id = Date.now(); parsed.createdAt = new Date().toLocaleDateString("ko-KR"); parsed.rawInput = input;
       await sbUpsert("techniques", [techToRow(parsed)]);
@@ -1736,7 +1736,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
       });
 
       const result = await claude("주식 매매 분석 전문가. 핵심만 간결하게. 분석은 반드시 [적용 기법 강의록] 내용에 근거하고, 강의록에 없는 내용을 일반론으로 단정하지 않는다. 차트 이미지가 없으면 차트 관련 내용을 지어내지 않는다. 차트에서 보이는 내용이 기법 설명과 무관하면 무시한다. [중요] '정답매매'는 사용자가 실제 실행한 매매가 아닌, 해당 기법 기준으로 올바르게 했어야 할 이상적 시나리오다. 절대 실제 매매 내용을 정답매매로 제시하지 않는다.",
-        userContent, 8000, undefined, "claude-fable-5");
+        userContent, 16000, undefined, "claude-fable-5");
       // 응답 끝에서 LECTURE:id 와 SIMILAR:[...] 추출
       const simMatch = result.match(/SIMILAR:\[([\d,\s]*)\]/);
       const lecMatch = result.match(/LECTURE:\s*(\d+)/);
@@ -1999,7 +1999,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
         `※ 응답 맨 끝에 다른 텍스트 없이 딱 한 줄: LECTURE:강의록ID  (이 흐름에 가장 필요한 강의 1개의 ID, 위 [강의록 목록]의 [ID:...] 중에서)`;
       const result = await claude(
         "주식 단기매매 흐름 복기 코치. 여러 매매를 시간순 스토리로 엮어 포지션 전개·판단 일관성·반복 실수를 도출한다. 반드시 제공된 실제 매매 데이터에 근거하고 날짜·종목을 인용한다.",
-        prompt, 6000, undefined, "claude-fable-5");
+        prompt, 16000, undefined, "claude-fable-5");
       const lecMatch = result.match(/LECTURE:\s*(\d+)/);
       const recId = lecMatch ? parseInt(lecMatch[1]) : null;
       const content = result.replace(/\n?LECTURE:\s*\d+\s*$/, "").trim();
@@ -3116,7 +3116,7 @@ function RealTradeTab({ techniques = [], onOpenLecture, onBg }) {
       const result = await claude(
         "주식 실전매매 메시지 요약 전문가. 핵심 내용을 2-3문장으로 간결하게 요약.",
         `다음 실전매매 카카오톡 메시지를 요약해주세요:\n\n${target.textContent}`,
-        800, undefined, "claude-fable-5"
+        4000, undefined, "claude-fable-5"
       );
       const summary = result.trim();
       // 자동 저장(분석과 동일) — 화면 이동해도 유실 안 됨
@@ -3268,7 +3268,7 @@ function RealTradeTab({ techniques = [], onOpenLecture, onBg }) {
         isLecture
           ? "주식 매매 강의(교육) 정리 전문가. 강사가 남긴 강의/원칙 메시지를 핵심 원칙·기준·적용법·주의사항으로 구조화하고 관련 강의록 기법과 연결한다. 강의에 없는 내용을 일반론으로 지어내지 않는다."
           : "주식 실전매매 분석 전문가. 강사(교본)의 카카오톡 매매 메시지와 차트의 B/S를 강의록 기법에 근거해 분석한다. 강의록에 없는 내용을 일반론으로 단정하지 않고, 차트에서 실제로 보이는 것만 사용한다.",
-        content, 8000, undefined, "claude-fable-5"
+        content, 16000, undefined, "claude-fable-5"
       );
       const simMatch = result.match(/SIMILAR:\[([\d,\s]*)\]/);
       const lecMatch = result.match(/LECTURE:\s*(\d+)/);
@@ -4045,7 +4045,7 @@ function MonthlyReviewTab({ techniques = [], onOpenTrade, onOpenLecture, onBg })
 
       const result = await claude(
         "주식 단기매매 복기 코치. 한 달치 매매 데이터를 종합해 구체적이고 실행가능한 개선점을 도출한다. 반드시 제공된 실제 매매/강사 데이터에 근거하고, 날짜·종목을 인용하며, 근거 없는 일반론을 쓰지 않는다.",
-        prompt, 8000, undefined, "claude-fable-5");
+        prompt, 16000, undefined, "claude-fable-5");
       const lecMatch = result.match(/LECTURE:\s*([\d,\s]+)/);
       const lecIds = lecMatch ? lecMatch[1].split(",").map(s => parseInt(s.trim())).filter(n => !isNaN(n)).slice(0, 3) : [];
       const body = result.replace(/\n?LECTURE:\s*[\d,\s]+\s*$/, "").trim();
