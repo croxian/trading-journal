@@ -355,12 +355,22 @@ const highlightText = (text, terms) => {
 };
 
 const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_KEY || "";
-const claude = async (system, userContent, maxTokens = 1000, temperature, model = "claude-sonnet-4-6") => {
+// AI 분석 공통 모델. 2026-09 벤치(8건, 교차 심사)에서 opus-5-5@high가 fable-5 대비 품질↑·비용↓, medium 대비 맞대결 23:9 우세
+const AI_MODEL = "claude-opus-5-5";
+const AI_EFFORT = "high";
+// 과부하(529)·거부(refusal)·빈 응답 시 대체 모델 (벤치 2위)
+const FALLBACK_MODEL = { "claude-opus-5-5": "claude-fable-5-1", "claude-fable-5-1": "claude-opus-5-5", "claude-fable-5": "claude-opus-5-5" };
+// 차트 판독 공통 규칙 (각도 주석 오독·봉 주기 판별)
+const CHART_ANGLE_NOTE = "각도(°) 주석(예: 57.42°(6.58%))의 앞 숫자는 추세선 기울기일 뿐 등락률이 아니다 — 괄호 안 %만 가격 변동폭 주석이다. 각도 값을 수익률·등락률로 읽지 말 것.";
+const CHART_TF_NOTE = "봉 주기: 분석 전에 하단 시간 눈금 사이 캔들 수를 세어 몇 분봉인지(1분/3분/5분 등, 일봉이면 일봉) 판별하고, 차트 분석 첫 줄에 '○분봉(근거)'로 명시한 뒤 이후 타이밍은 이 봉 주기 기준으로 서술. 셀 때는 눈금 간격이 일정한 구간을 쓰고, 날짜 경계(빨간 세로선) 부근이나 15:30 전후(정규장→NXT 전환)처럼 간격이 불규칙한 구간은 피할 것. 확실하지 않으면 '추정'으로 표기.";
+const claude = async (system, userContent, maxTokens = 1000, temperature, model = "claude-sonnet-4-6", effort) => {
   const headers = { "Content-Type": "application/json", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" };
   if (ANTHROPIC_KEY) headers["x-api-key"] = ANTHROPIC_KEY;
   const RETRYABLE = new Set([500, 529]);
-  const call = async (mdl) => {
-    const body = JSON.stringify({ model: mdl, max_tokens: maxTokens, system, messages: [{ role: "user", content: userContent }], ...(temperature !== undefined ? { temperature } : {}) });
+  // 1회 요청(500/529는 백오프 재시도). 성공 시 {text, stop} 반환, 그 외 HTTP 오류는 status 붙여 throw
+  const post = async (mdl, sys, content, eff) => {
+    const body = JSON.stringify({ model: mdl, max_tokens: maxTokens, system: sys, messages: [{ role: "user", content }],
+      ...(temperature !== undefined ? { temperature } : {}), ...(eff ? { output_config: { effort: eff } } : {}) });
     for (let attempt = 0; attempt < 3; attempt++) {
       let res;
       try {
@@ -368,20 +378,7 @@ const claude = async (system, userContent, maxTokens = 1000, temperature, model 
       } catch (e) { throw new Error(`네트워크 오류 (CORS/연결): ${e.message}`); }
       if (res.ok) {
         const data = await res.json();
-        const text = data.content?.map(b => b.text || "").join("") || "";
-        if (text.trim()) return text;
-        // 빈 응답: 첨부 이미지가 안전분류기 오탐(stop_reason:refusal)을 일으킨 경우 → 이미지 빼고 텍스트만으로 1회 재시도
-        if (Array.isArray(userContent) && userContent.some(b => b.type === "image")) {
-          const textOnly = userContent.filter(b => b.type !== "image");
-          const rbody = JSON.stringify({ model: mdl, max_tokens: maxTokens, system: (system ? system + "\n" : "") + "(참고: 첨부 이미지는 처리 불가로 제외됨. 텍스트만으로 분석하고, 차트/이미지 기반 항목은 '이미지 없음'으로 명시.)", messages: [{ role: "user", content: textOnly }], ...(temperature !== undefined ? { temperature } : {}) });
-          try {
-            const r2 = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body: rbody });
-            if (r2.ok) { const d2 = await r2.json(); const t2 = d2.content?.map(b => b.text || "").join("") || ""; if (t2.trim()) return t2; }
-          } catch {}
-        }
-        throw new Error(data.stop_reason === "refusal"
-          ? "모델이 응답을 거부했습니다(refusal). 첨부 이미지가 원인일 수 있어 이미지를 빼고 재시도했으나 실패 — 이미지를 교체하거나 텍스트만으로 시도해 주세요."
-          : "빈 응답을 받았습니다. 잠시 후 다시 시도해 주세요.");
+        return { text: data.content?.map(b => b.text || "").join("") || "", stop: data.stop_reason };
       }
       if (RETRYABLE.has(res.status) && attempt < 2) {
         const wait = res.status === 529 ? 8000 : 4000;
@@ -395,13 +392,30 @@ const claude = async (system, userContent, maxTokens = 1000, temperature, model 
       throw err;
     }
   };
+  const fb = FALLBACK_MODEL[model];
+  let r;
   try {
-    return await call(model);
+    r = await post(model, system, userContent, effort);
   } catch (e) {
-    // Fable이 과부하(529)로 계속 실패하면 Opus 4.8로 자동 폴백 (분석이 실패로 끝나지 않도록)
-    if (e.status === 529 && /fable/.test(model)) return await call("claude-opus-4-8");
-    throw e;
+    // 과부하(529)가 계속되면 대체 모델로 (분석이 실패로 끝나지 않도록)
+    if (e.status === 529 && fb) r = await post(fb, system, userContent);
+    else throw e;
   }
+  if (r.text.trim()) return r.text;
+  // 빈 응답/거부: ① 대체 모델(이미지 포함 그대로) → ② 첨부 이미지가 안전분류기 오탐을 일으킨 경우 대비, 이미지 빼고 텍스트만
+  if (fb) {
+    try { const r2 = await post(fb, system, userContent); if (r2.text.trim()) return r2.text; } catch {}
+  }
+  if (Array.isArray(userContent) && userContent.some(b => b.type === "image")) {
+    const textOnly = userContent.filter(b => b.type !== "image");
+    const sys2 = (system ? system + "\n" : "") + "(참고: 첨부 이미지는 처리 불가로 제외됨. 텍스트만으로 분석하고, 차트/이미지 기반 항목은 '이미지 없음'으로 명시.)";
+    try { const r3 = await post(model, sys2, textOnly, effort); if (r3.text.trim()) return r3.text; } catch {}
+  }
+  throw new Error(r.stop === "refusal"
+    ? "모델이 응답을 거부했습니다(refusal). 대체 모델·이미지 제외로 재시도했으나 실패 — 이미지를 교체하거나 텍스트만으로 시도해 주세요."
+    : r.stop === "max_tokens"
+      ? "출력 한도(max_tokens)에 도달해 본문이 비었습니다. 다시 시도해 주세요."
+      : "빈 응답을 받았습니다. 잠시 후 다시 시도해 주세요.");
 };
 const parseJSON = async (text) => {
   const m = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
@@ -898,7 +912,7 @@ function LectureTab({ pendingLecture, onConsumed }) {
     if (!input.trim()) return;
     setSaving(true); setFeedback("");
     try {
-      const raw = await claude(LECTURE_SYSTEM, input, 16000, undefined, "claude-fable-5");
+      const raw = await claude(LECTURE_SYSTEM, input, 16000, undefined, AI_MODEL, AI_EFFORT);
       const parsed = await parseJSON(raw);
       parsed.id = Date.now(); parsed.createdAt = new Date().toLocaleDateString("ko-KR"); parsed.rawInput = input;
       await sbUpsert("techniques", [techToRow(parsed)]);
@@ -1686,6 +1700,8 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
       const chartMarkupNote = "\n- 차트는 반드시 좌→우 시간순으로 읽을 것. 왼쪽 캔들이 과거, 오른쪽 캔들이 현재/미래다. 차트 왼쪽에 있는 과거 고점·저점·급등락은 현재 매매의 직접 원인이 아닌 '사전 맥락'으로만 참고할 것." +
         "\n- 차트에 표시된 도형 해석: 파란/빨간 오각형(B/S 글자)은 사용자가 실제로 체결한 매수(B)/매도(S) 지점이다. B 마커가 차트 오른쪽에 있다면 왼쪽의 모든 캔들은 '매수 이전 역사'이며 그 구간의 가격 움직임을 현재 매매의 근거로 직접 연결하지 말 것. 분석의 기준점은 B 마커 위치이고, B 이전 차트는 진입 맥락 파악용으로만 활용할 것. '세력의 매수/매도 물량 출현' 같은 추측성 해석을 붙이지 말 것. 사각형(네모) 표시는 정답매매의 이상적 매수(진입) 타점, 동그라미(원/타원) 표시는 정답매매의 이상적 매도(청산) 타점이다. 차트에 네모·동그라미가 여러 개 있을 수 있으며, 개수에 상관없이 보이는 것을 빠짐없이 모두 확인하여 각각의 위치와 가격대를 파악할 것. 실제 매매(B/S 마커)와 정답매매(네모/동그라미)의 위치·가격을 하나씩 비교해 진입·청산 타이밍 차이를 분석에 활용하고, 도형이 보이지 않으면 언급하지 말 것." +
         "\n- 차트에 표시된 % 수치(예: -52.87%, +49.40% 등)는 키움 HTS가 자동 표시하는 '가격 변동폭 주석'이다. 위치와 무관하게 이 수치는 절대 현재 매매의 손익이 아니다. 실제 매매 손익은 오직 매수가·매도가(입력된 수치)와 B/S 마커 위치로만 판단할 것. B 마커 위치의 가격 ≈ 매수가, S 마커 위치의 가격 ≈ 매도가로 크로스체크하여 분석에 활용할 것." +
+        `\n- ${CHART_ANGLE_NOTE}` +
+        `\n- ${CHART_TF_NOTE}` +
         "\n- '최고 OO,OOO', '최저 OO,OOO' 옆의 가격은 그 구간의 일중 고가/저가 자동주석일 뿐 매매가가 아니다. 또한 차트에 그어진 수평선(파란/회색 가로선, 커서선, 기준선)의 가격도 매매가나 상한가가 아니다 — 임의의 참조선이므로 그 값을 상한가·매수가·매도가로 지어내지 말 것. 이번 매매의 실제 매수가·매도가는 위 [현재 매매]에 입력된 값이 유일한 근거이며, 차트 주석·수평선 가격이 입력값과 다르거나 우연히 같아도 입력값을 기준으로 해석할 것." +
         "\n- [중요] '최고 OO,OOO (-40.54%, 13:21)'처럼 최고/최저 주석 옆의 %, 그리고 우측 상단의 HC/LC 값은 '그 고점(또는 저점)에서 차트 맨 오른쪽 현재가(가장 최근 캔들, 보통 당일)까지의 변동률'이다. 이 %는 여러 거래일에 걸친 누적 수치일 수 있다. 따라서 전일에 찍힌 고점의 -40%가 '전일 하루 동안 -40% 무너졌다'는 뜻이 절대 아니다(전일 종가까지의 하락 + 당일 하락이 합쳐진 값). 특정 하루(전일)의 봉 모양·양봉/음봉 여부·윗꼬리·마감 강도를 판단할 때는 이 누적 %를 쓰지 말고, 그 날짜 구간 안에서의 시가→종가→고가→저가 캔들 형태만 보고 판단할 것. 전일 캔들의 마감 강도는 전일 종가 위치로만 평가하고, 당일 하락분을 전일 봉에 합산하지 말 것." +
         "\n- 분석 대상일의 시가가 그 직전에 표시된 캔들들의 가격대보다 위/아래에서 시작했다면 갭상승/갭하락으로 언급 가능하나, 차트에 직접 보이지 않는 사실을 추정해서 단정하지 말 것." +
@@ -1736,7 +1752,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
       });
 
       const result = await claude("주식 매매 분석 전문가. 핵심만 간결하게. 분석은 반드시 [적용 기법 강의록] 내용에 근거하고, 강의록에 없는 내용을 일반론으로 단정하지 않는다. 차트 이미지가 없으면 차트 관련 내용을 지어내지 않는다. 차트에서 보이는 내용이 기법 설명과 무관하면 무시한다. [중요] '정답매매'는 사용자가 실제 실행한 매매가 아닌, 해당 기법 기준으로 올바르게 했어야 할 이상적 시나리오다. 절대 실제 매매 내용을 정답매매로 제시하지 않는다.",
-        userContent, 16000, undefined, "claude-fable-5");
+        userContent, 16000, undefined, AI_MODEL, AI_EFFORT);
       // 응답 끝에서 LECTURE:id 와 SIMILAR:[...] 추출
       const simMatch = result.match(/SIMILAR:\[([\d,\s]*)\]/);
       const lecMatch = result.match(/LECTURE:\s*(\d+)/);
@@ -1999,7 +2015,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
         `※ 응답 맨 끝에 다른 텍스트 없이 딱 한 줄: LECTURE:강의록ID  (이 흐름에 가장 필요한 강의 1개의 ID, 위 [강의록 목록]의 [ID:...] 중에서)`;
       const result = await claude(
         "주식 단기매매 흐름 복기 코치. 여러 매매를 시간순 스토리로 엮어 포지션 전개·판단 일관성·반복 실수를 도출한다. 반드시 제공된 실제 매매 데이터에 근거하고 날짜·종목을 인용한다.",
-        prompt, 16000, undefined, "claude-fable-5");
+        prompt, 16000, undefined, AI_MODEL, AI_EFFORT);
       const lecMatch = result.match(/LECTURE:\s*(\d+)/);
       const recId = lecMatch ? parseInt(lecMatch[1]) : null;
       const content = result.replace(/\n?LECTURE:\s*\d+\s*$/, "").trim();
@@ -3116,7 +3132,7 @@ function RealTradeTab({ techniques = [], onOpenLecture, onBg }) {
       const result = await claude(
         "주식 실전매매 메시지 요약 전문가. 핵심 내용을 2-3문장으로 간결하게 요약.",
         `다음 실전매매 카카오톡 메시지를 요약해주세요:\n\n${target.textContent}`,
-        4000, undefined, "claude-fable-5"
+        8000, undefined, AI_MODEL, AI_EFFORT
       );
       const summary = result.trim();
       // 자동 저장(분석과 동일) — 화면 이동해도 유실 안 됨
@@ -3233,7 +3249,9 @@ function RealTradeTab({ techniques = [], onOpenLecture, onBg }) {
           `- 파란/빨간 오각형(B/S 글자)은 강사가 실제 체결한 매수(B)/매도(S) 지점이며, 이 강사의 B/S가 곧 정답매매(모범 답안)다. 차트는 좌→우 시간순(왼쪽=과거).\n` +
           `- 실전매매 차트엔 네모/동그라미(정답매매 표식)가 없다. 정답 타점을 따로 찾지 말고 강사의 B/S를 정답으로 간주할 것.\n` +
           `- 차트의 %주석·수평선·'최고/최저' 옆 가격은 손익이나 매매가가 아니다(HTS 자동표시). 진입/청산가는 B/S 마커 위치로 판단.\n` +
+          `- ${CHART_ANGLE_NOTE}\n` +
           `- 가로축 라벨: '/' 포함(예 05/21)=날짜, '/' 없는 숫자(예 10,11,12)=시간(시). 09:00 이전/15:30 이후 캔들은 NXT 연장거래.\n` +
+          `- ${CHART_TF_NOTE}\n` +
           `- 상단 가격대에 수평으로 일자로 붙어 마감하면 상한가 마감.\n` +
           `- 각 차트의 종목: ${(() => { const stocks = stockList(target.stock); return imgs.slice(0, 4).map((im, i) => `차트${i + 1}=${imgStock(im, stocks) || "미지정(차트 상단 인쇄 종목명으로 판단)"}`).join(" / "); })()}. 종목이 여러 개면 종목별로 구분해 B/S를 분석하고, 미지정 차트는 상단(HTS/MTS)에 인쇄된 종목명으로 식별할 것.\n` +
           `이미지에서 실제로 보이는 것만 사용하고, 불확실하면 지어내지 말 것.`
@@ -3268,7 +3286,7 @@ function RealTradeTab({ techniques = [], onOpenLecture, onBg }) {
         isLecture
           ? "주식 매매 강의(교육) 정리 전문가. 강사가 남긴 강의/원칙 메시지를 핵심 원칙·기준·적용법·주의사항으로 구조화하고 관련 강의록 기법과 연결한다. 강의에 없는 내용을 일반론으로 지어내지 않는다."
           : "주식 실전매매 분석 전문가. 강사(교본)의 카카오톡 매매 메시지와 차트의 B/S를 강의록 기법에 근거해 분석한다. 강의록에 없는 내용을 일반론으로 단정하지 않고, 차트에서 실제로 보이는 것만 사용한다.",
-        content, 16000, undefined, "claude-fable-5"
+        content, 16000, undefined, AI_MODEL, AI_EFFORT
       );
       const simMatch = result.match(/SIMILAR:\[([\d,\s]*)\]/);
       const lecMatch = result.match(/LECTURE:\s*(\d+)/);
@@ -4045,7 +4063,7 @@ function MonthlyReviewTab({ techniques = [], onOpenTrade, onOpenLecture, onBg })
 
       const result = await claude(
         "주식 단기매매 복기 코치. 한 달치 매매 데이터를 종합해 구체적이고 실행가능한 개선점을 도출한다. 반드시 제공된 실제 매매/강사 데이터에 근거하고, 날짜·종목을 인용하며, 근거 없는 일반론을 쓰지 않는다.",
-        prompt, 16000, undefined, "claude-fable-5");
+        prompt, 16000, undefined, AI_MODEL, AI_EFFORT);
       const lecMatch = result.match(/LECTURE:\s*([\d,\s]+)/);
       const lecIds = lecMatch ? lecMatch[1].split(",").map(s => parseInt(s.trim())).filter(n => !isNaN(n)).slice(0, 3) : [];
       const body = result.replace(/\n?LECTURE:\s*[\d,\s]+\s*$/, "").trim();
