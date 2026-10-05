@@ -143,6 +143,48 @@ const sbDeleteOldFlowReviews = async (before) => {
 const FLOW_CACHE = "flow_reviews_cache";
 const loadFlowCache = () => { try { return JSON.parse(localStorage.getItem(FLOW_CACHE) || "[]"); } catch { return []; } };
 const saveFlowCache = (list) => { try { localStorage.setItem(FLOW_CACHE, JSON.stringify(list.slice(0, 200))); } catch {} };
+
+// 매매일지 분석 작업 저장소 — 모듈 수준이라 탭 이동(컴포넌트 언마운트)해도 유지
+// - 대기열: 배치/흐름 분석을 순서대로 1건씩 실행 (흐름분석이 앞서 넣은 배치 분석 결과를 쓰도록 순서 보장)
+// - singles: 분석 중인 매매 id (단건 분석은 매매별로 동시 실행, 같은 매매 중복 실행만 방지)
+const jobStore = (() => {
+  let waiting = [], running = null, seq = 0, reporter = null;
+  const singles = new Set(), subs = new Set();
+  const report = () => reporter?.("jqueue", running
+    ? `${running.label}${running.progress ? ` ${running.progress}` : ""}${waiting.length ? ` · 대기 ${waiting.length}건` : ""}`
+    : null);
+  const emit = (evt) => { report(); subs.forEach(f => f(evt)); };
+  const pump = async () => {
+    if (running || !waiting.length) return;
+    const job = waiting.shift();
+    running = { id: job.id, kind: job.kind, label: job.label, progress: "" };
+    emit({ type: "start" });
+    let result, error;
+    try {
+      result = await job.run(p => { if (running?.id === job.id) { running = { ...running, progress: p }; emit({ type: "progress" }); } });
+    } catch (e) { error = e?.message || String(e); }
+    const done = running;
+    running = null;
+    emit({ type: "done", job: done, result, error });
+    pump();
+  };
+  return {
+    // 반환값: 내 앞에 있는 작업 수(0이면 즉시 시작)
+    enqueue(kind, label, run) {
+      const ahead = (running ? 1 : 0) + waiting.length;
+      waiting.push({ id: ++seq, kind, label, run });
+      emit({ type: "add" }); pump();
+      return ahead;
+    },
+    cancel(id) { waiting = waiting.filter(j => j.id !== id); emit({ type: "cancel" }); },
+    snapshot: () => ({ running, waiting: waiting.map(({ id, kind, label }) => ({ id, kind, label })), singles: [...singles] }),
+    setReporter(fn) { reporter = fn; report(); },
+    isSingle: (id) => singles.has(id),
+    startSingle(id) { singles.add(id); emit({ type: "single" }); },
+    endSingle(id) { singles.delete(id); emit({ type: "single" }); },
+    subscribe(fn) { subs.add(fn); return () => { subs.delete(fn); }; },
+  };
+})();
 const sbSaveFlowReview = async (row) => {
   const r = await fetch(`${SB_URL}/rest/v1/flow_reviews`, {
     method: "POST",
@@ -1170,7 +1212,8 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
   const [groupByDate, setGroupByDate] = useState(true);
   const [scrollToDate, setScrollToDate] = useState(null);
   const [detailAiAnalysis, setDetailAiAnalysis] = useState("");
-  const [detailAiLoading, setDetailAiLoading] = useState(false);
+  const [jobs, setJobs] = useState(jobStore.snapshot);   // 분석 대기열/단건 분석 상태 (모듈 저장소 구독)
+  const [flowDone, setFlowDone] = useState(null);        // 방금 끝난 흐름분석 알림 {id,title,...}
   const [aiEditMode, setAiEditMode] = useState(false);
   const [aiEditText, setAiEditText] = useState("");
   const [similarTrades, setSimilarTrades] = useState([]);
@@ -1180,9 +1223,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
-  const [batchState, setBatchState] = useState(null);   // 선택 배치 분석 진행 {done,total}
   const [flowReport, setFlowReport] = useState(null);   // 흐름 멀티분석 결과 {content, recLectureId}
-  const [flowLoading, setFlowLoading] = useState(false);
   const [flowReviews, setFlowReviews] = useState([]);   // 저장된 흐름분석 목록(휴지통 포함, deleted_at으로 구분)
   const [flowSearch, setFlowSearch] = useState("");
   const flowReviewsRef = useRef([]);
@@ -1266,6 +1307,40 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
       .then(rows => { if (rows) { setFlowReviews(rows); saveFlowCache(rows); } });
   }, []);
   useEffect(() => { flowReviewsRef.current = flowReviews; }, [flowReviews]);
+
+  // 분석 작업 저장소 구독: 진행 표시 갱신 + 완료 결과 반영 (탭을 떠났다 돌아와도 이 인스턴스가 받음)
+  useEffect(() => {
+    jobStore.setReporter(onBg);
+    setJobs(jobStore.snapshot());
+    return jobStore.subscribe(({ type, job, result, error }) => {
+      setJobs(jobStore.snapshot());
+      if (type !== "done") return;
+      if (job.kind === "flow") {
+        if (error) { setFeedback(`❌ 흐름분석 실패: ${error}`); return; }
+        setFlowReviews(p => { const next = [result.row, ...p.filter(r => r.id !== result.row.id)]; saveFlowCache(next); return next; });
+        setFlowDone(result.row);
+        if (result.localOnly) setFeedback("⚠️ 흐름분석 클라우드 저장 실패(로컬 보관). flow_reviews 테이블 SQL을 실행해 주세요.");
+      } else if (job.kind === "batch") {
+        if (error) { setFeedback(`❌ 배치 분석 실패: ${error}`); return; }
+        const { ok, skip, fail } = result;
+        setFeedback(`✅ ${job.label} 완료: 성공 ${ok}${skip ? ` / 스킵 ${skip}` : ""}${fail ? ` / 실패 ${fail}` : ""}`);
+        // 다른 인스턴스(탭 이동 전)에서 시작된 배치일 수 있으므로 목록을 조용히 갱신
+        sbGetTrades().then(rows => {
+          const loaded = rows.map(rowToTrade).sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.id - a.id);
+          setTrades(loaded); tradesRef.current = loaded;
+        }).catch(() => {});
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const detailAiLoading = !!selected && jobs.singles.includes(selected.id);
+  // 대기열 작업 실행 시점의 최신 매매 데이터(대기 중 수정·앞선 배치 결과 반영)
+  const freshTrades = async (ids) => {
+    try {
+      const m = new Map((await sbGetTrades()).map(rowToTrade).map(t => [t.id, t]));
+      return ids.map(id => m.get(id)).filter(Boolean);
+    } catch { return ids.map(id => tradesRef.current.find(t => t.id === id)).filter(Boolean); }
+  };
 
   // 다른 탭(월간복기 리포트의 예시 링크 등)에서 특정 매매로 이동 요청 → 로드 후 상세 열기
   useEffect(() => {
@@ -1613,7 +1688,11 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
     const trade = tradeArg || selected;   // 인자 없으면 상세의 selected, 있으면 배치 대상 매매
     const isDetail = !tradeArg;
     if (!trade?.reason) { if (isDetail) setFeedback("❌ 매매 이유를 먼저 입력하세요."); return { ok: false, skipped: true }; }
-    if (isDetail) { setDetailAiLoading(true); setDetailAiAnalysis(""); setAiEditMode(false); onBg?.("j-single", "매매 분석 중…"); }
+    if (jobStore.isSingle(trade.id)) { if (isDetail) setFeedback("⏳ 이 매매는 이미 분석 중입니다."); return { ok: false, skipped: true }; }
+    // 매매별 동시 실행: 결과는 그 매매를 보고 있을 때만 상세 화면에 반영(다른 매매로 이동해도 섞이지 않음)
+    const isCur = () => selectedRef.current?.id === trade.id;
+    jobStore.startSingle(trade.id);
+    if (isDetail) { setDetailAiAnalysis(""); setAiEditMode(false); onBg?.(`j-single-${trade.id}`, `매매 분석 중… ${trade.stock}`); }
     try {
       const chartImg = trade.chartImg ?? await sbGetChartImg(trade.id);   // 배치는 목록 데이터라 차트 미로드 → 개별 로딩
       // 1. 적용 기법과 관련된 강의록을 우선 선별하되, 나머지 강의록도 요약 형태로 함께 제공 (다른 강의록에 유사 내용이 있을 수 있음)
@@ -1785,22 +1864,23 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
       } else {
         sims = calcSimilarTrades(trade, trades);
       }
-      if (isDetail) {   // 상세에서 호출된 경우에만 상세 화면 상태 갱신
+      // 캐시는 항상 갱신(나중에 이 매매를 열면 복원), 화면은 지금 보고 있는 매매일 때만 (배치 중 열어둔 매매도 실시간 반영)
+      analysisCacheRef.current[trade.id] = { text: analysisText, similarIds: sims.map(t => t.id), recLectureId: recId };
+      if (isCur()) {
         setDetailAiAnalysis(analysisText);
         setRecLectureId(recId);
         setSimilarTrades(sims);
-        analysisCacheRef.current[trade.id] = { text: analysisText, similarIds: sims.map(t => t.id), recLectureId: recId };
       }
       // 분석 결과 저장 (추천 강의 ID는 숨김 마커로 함께). 배치는 저장 실패를 알려야 하므로 전파
       const toSave = withLec(analysisText, recId);
       try {
         await sbPatch(trade.id, { ai_analysis: toSave });
         setTrades(p => p.map(t => t.id === trade.id ? { ...t, aiAnalysis: toSave } : t));
-        if (isDetail) setSelected(s => (s && s.id === trade.id ? { ...s, aiAnalysis: toSave } : s));
+        setSelected(s => (s && s.id === trade.id ? { ...s, aiAnalysis: toSave } : s));
       } catch (e) { if (!isDetail) throw e; }
       return { ok: true, recId };
-    } catch (e) { if (isDetail) setFeedback(`❌ ${e.message}`); return { ok: false, error: e.message }; }
-    finally { if (isDetail) { setDetailAiLoading(false); onBg?.("j-single", null); } }
+    } catch (e) { if (isDetail) setFeedback(`❌ ${trade.stock} 분석 실패: ${e.message}`); return { ok: false, error: e.message }; }
+    finally { jobStore.endSingle(trade.id); if (isDetail) onBg?.(`j-single-${trade.id}`, null); }
   };
 
   const handleCorrection = async () => {
@@ -1990,29 +2070,43 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
   };
 
   // 선택 매매 각각을 단건 분석과 동일하게 순차 분석·저장 (배치)
-  const analyzeSelectedBatch = async () => {
-    const targets = [...selectedIds].map(id => trades.find(t => t.id === id)).filter(Boolean);
-    if (!targets.length) return;
-    // 로컬(SelectBar 표시) + App 배너(탭 이동해도 유지). onBg는 언마운트 후에도 호출되어 배너가 살아있음
-    const report = (done) => { setBatchState({ done, total: targets.length }); onBg?.("batch", `선택 각각 분석 중… ${done}/${targets.length}`); };
-    report(0);
-    let ok = 0, skip = 0, fail = 0;
-    for (let i = 0; i < targets.length; i++) {
-      const r = await analyzeDetailTrade(targets[i]);   // 인자 전달 → 배치 모드(상세 UI 미변경, DB 저장)
-      if (r?.ok) ok++; else if (r?.skipped) skip++; else fail++;
-      report(i + 1);
-    }
-    setBatchState(null); onBg?.("batch", null);
-    setFeedback(`✅ 배치 분석 완료: 성공 ${ok}${skip ? ` / 이유없음 스킵 ${skip}` : ""}${fail ? ` / 실패 ${fail}` : ""}`);
+  // 대기열 추가 후 선택 해제(다음 묶음을 바로 고를 수 있게) + 대기 순서 안내
+  const enqueueNotice = (ahead) => {
+    setSelectedIds(new Set());
+    setFeedback(ahead ? `⏳ 대기열에 추가됨 — 앞에 ${ahead}건, 끝나면 자동 시작` : "▶ 분석 시작 — 진행 상황은 위 대기열·우측 하단 배너에서");
+  };
+  const flowLabelOf = (ts) => {
+    const st = [...new Set(ts.map(t => t.stock).filter(Boolean))];
+    return `${st.slice(0, 2).join(", ")}${st.length > 2 ? " 외" : ""}`;
   };
 
-  // 선택 매매를 '같은 종목/테마의 날짜순 흐름'으로 묶어 한 번에 복기 (흐름 멀티분석)
-  const analyzeFlowSelected = async () => {
-    const targets = [...selectedIds].map(id => trades.find(t => t.id === id)).filter(Boolean)
-      .sort((a, b) => (a.date || "").localeCompare(b.date || "") || a.id - b.id);
-    if (targets.length < 2) { setFeedback("❌ 흐름분석은 2건 이상 선택하세요."); return; }
-    setFlowLoading(true); setFlowReport(null); setFeedback(""); onBg?.("flow", "흐름분석 중…");
-    try {
+  const analyzeSelectedBatch = () => {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    const n = ids.length;
+    const ahead = jobStore.enqueue("batch", `🧠 선택 각각 분석 ${flowLabelOf(ids.map(id => trades.find(t => t.id === id)).filter(Boolean))} (${n}건)`, async (progress) => {
+      const targets = await freshTrades(ids);   // 실행 시점 최신 데이터
+      let ok = 0, skip = 0, fail = 0;
+      progress(`0/${targets.length}`);
+      for (let i = 0; i < targets.length; i++) {
+        const r = await analyzeDetailTrade(targets[i]);   // 인자 전달 → 배치 모드(DB 저장, 열려 있는 매매면 화면도 갱신)
+        if (r?.ok) ok++; else if (r?.skipped) skip++; else fail++;
+        progress(`${i + 1}/${targets.length}`);
+      }
+      return { ok, skip, fail };
+    });
+    enqueueNotice(ahead);
+  };
+
+  // 선택 매매를 '같은 종목/테마의 날짜순 흐름'으로 묶어 한 번에 복기 (흐름 멀티분석) — 대기열로 실행
+  const analyzeFlowSelected = () => {
+    const ids = [...selectedIds];
+    if (ids.length < 2) { setFeedback("❌ 흐름분석은 2건 이상 선택하세요."); return; }
+    const ahead = jobStore.enqueue("flow", `🔗 흐름분석 ${flowLabelOf(ids.map(id => trades.find(t => t.id === id)).filter(Boolean))} (${ids.length}건)`, async (progress) => {
+      progress("분석 중…");
+      // 실행 시점 최신 데이터(앞서 대기열에 넣은 배치 분석 결과가 개별분석으로 반영됨)
+      const targets = (await freshTrades(ids)).sort((a, b) => (a.date || "").localeCompare(b.date || "") || a.id - b.id);
+      if (targets.length < 2) throw new Error("대상 매매가 2건 미만(삭제됨)");
       const techSummary = techniques.map((t, i) =>
         `[ID:${t.id}] ${i < 51 ? `${i + 1}강 ` : ""}${t.name} / 카테고리:${t.category || "-"} / 매수조건:${t.entry?.condition || "-"} / 트리거:${t.pattern?.trigger || "-"} / 태그:${(t.tags || []).join(",") || "-"}`
       ).join("\n");
@@ -2063,16 +2157,13 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
       const lecMatch = result.match(/LECTURE:\s*(\d+)/);
       const recId = lecMatch ? parseInt(lecMatch[1]) : null;
       const content = result.replace(/\n?LECTURE:\s*\d+\s*$/, "").trim();
-      setFlowReport({ content, recLectureId: recId });
-      // 저장(클라우드; 미생성 시 로컬 보관). 추천 강의는 숨김 마커로 content에 함께 저장
+      // 저장(클라우드; 미생성 시 로컬 보관). 추천 강의는 숨김 마커로 content에 함께 저장. 화면 반영은 저장소 구독(완료 이벤트)에서
       const title = `${stocks.slice(0, 3).join(", ")}${stocks.length > 3 ? " 외" : ""} · ${d0}~${d1} (${targets.length}건)`;
       const row = { title, trade_ids: targets.map(t => t.id).join(","), content: withLec(content, recId), created_at: new Date().toISOString() };
-      let savedRow;
-      try { savedRow = await sbSaveFlowReview(row); }
-      catch { savedRow = { id: `local-${Date.now()}`, ...row }; setFeedback("⚠️ 클라우드 저장 실패(로컬 보관). flow_reviews 테이블 SQL을 실행해 주세요."); }
-      setFlowReviews(p => { const next = [savedRow, ...p]; saveFlowCache(next); return next; });
-    } catch (e) { setFeedback(`❌ ${e.message}`); }
-    setFlowLoading(false); onBg?.("flow", null);
+      try { return { row: await sbSaveFlowReview(row) }; }
+      catch { return { row: { id: `local-${Date.now()}`, ...row }, localOnly: true }; }
+    });
+    enqueueNotice(ahead);
   };
 
   // 흐름분석 리포트 열기/닫기 (히스토리 항목으로 남겨 뒤로가기로 닫힘)
@@ -2285,6 +2376,40 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
         })()}
         <button onClick={load} style={{ marginLeft: "auto", padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>🔄</button>
       </div>
+
+      {/* 분석 대기열 + 완료 알림 + 목록 피드백 (목록 화면 공통) */}
+      {view === "list" && !selected && (jobs.running || jobs.waiting.length > 0 || flowDone || feedback) && (
+        <div style={{ display: "grid", gap: 6, marginBottom: 10 }}>
+          {(jobs.running || jobs.waiting.length > 0) && (
+            <div style={{ border: "1px solid #3a3d4a", borderRadius: 8, background: "#161a24", padding: "8px 12px", display: "grid", gap: 5, fontSize: 12.5 }}>
+              {jobs.running && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#f39c12", fontWeight: 600 }}>
+                  <span style={{ whiteSpace: "nowrap" }}>▶ 실행 중</span>
+                  <span style={{ color: "#ddd", flex: 1, minWidth: 0 }}>{jobs.running.label}</span>
+                  {jobs.running.progress && <span style={{ whiteSpace: "nowrap" }}>{jobs.running.progress}</span>}
+                </div>
+              )}
+              {jobs.waiting.map((j, i) => (
+                <div key={j.id} style={{ display: "flex", alignItems: "center", gap: 8, color: "#888" }}>
+                  <span style={{ whiteSpace: "nowrap" }}>⏳ 대기 {i + 1}</span>
+                  <span style={{ color: "#bbb", flex: 1, minWidth: 0 }}>{j.label}</span>
+                  <button onClick={() => jobStore.cancel(j.id)} title="대기열에서 빼기"
+                    style={{ padding: "1px 8px", background: "#3a1a1a", border: "none", color: "#e74c3c", borderRadius: 4, cursor: "pointer", fontSize: 11 }}>취소</button>
+                </div>
+              ))}
+            </div>
+          )}
+          {flowDone && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 12px", background: "#12301a", border: "1px solid #2e7d32", borderRadius: 8, fontSize: 12.5, color: "#8ee0a0" }}>
+              <span style={{ flex: 1, minWidth: 0 }}>✅ 흐름분석 완료 — {flowDone.title}</span>
+              <button onClick={() => { const r = flowDone; setFlowDone(null); openFlowReview(r); }}
+                style={{ padding: "3px 10px", background: "#2e7d32", border: "none", color: "#fff", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>열기</button>
+              <button onClick={() => setFlowDone(null)} style={{ background: "none", border: "none", color: "#4caf50", cursor: "pointer", fontSize: 13 }}>✕</button>
+            </div>
+          )}
+          {feedback && <div style={{ fontSize: 13, color: /^(✅|▶|⏳|🗑️)/.test(feedback) ? "#4caf50" : feedback.startsWith("⚠️") ? "#f39c12" : "#e74c3c", padding: "0 2px" }}>{feedback}</div>}
+        </div>
+      )}
 
       {loading && <div style={{ color: "#555", padding: 40, textAlign: "center" }}>로딩 중...</div>}
 
@@ -2657,7 +2782,6 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
               {flowSearch && <button onClick={() => setFlowSearch("")} style={{ padding: "6px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>✕</button>}
               {matcher && <span style={{ fontSize: 12, color: "#888", whiteSpace: "nowrap" }}>{list.length}건</span>}
             </div>
-            {flowLoading && <div style={{ fontSize: 13, color: "#f39c12", padding: "4px 2px" }}>🔗 흐름분석 진행 중… 완료되면 여기에 추가됩니다</div>}
             {list.length === 0
               ? <div style={{ color: "#555", marginTop: 30, textAlign: "center", fontSize: 13, lineHeight: 1.8 }}>
                   {matcher ? "검색 결과 없음" : <>저장된 흐름분석이 없습니다<br />📋 매매 탭 → ☑️ 선택 → 2건 이상 고른 뒤 🔗 흐름분석</>}
@@ -2726,7 +2850,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
           );
         };
 
-        const busy = !!batchState || flowLoading;
+        const queued = !!(jobs.running || jobs.waiting.length);   // 진행 중이면 새 작업은 대기열로
         const sbtn = (on, bg) => ({ padding: "5px 12px", background: on ? bg : "#2a2d3a", color: on ? "#fff" : "#555", border: "none", borderRadius: 6, cursor: on ? "pointer" : "default", fontSize: 13, whiteSpace: "nowrap" });
         const SelectBar = selectMode ? (
           <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: "#161a24", borderRadius: 8, marginBottom: 10, border: "1px solid #4f8ef7", flexWrap: "wrap" }}>
@@ -2736,16 +2860,10 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
               전체선택
             </label>
             <span style={{ fontSize: 13, color: "#4f8ef7", fontWeight: 600 }}>{selectedIds.size}개 선택</span>
-            {batchState ? (
-              <span style={{ fontSize: 13, color: "#f39c12", fontWeight: 600 }}>🧠 분석 중… {batchState.done}/{batchState.total}</span>
-            ) : (
-              <>
-                <button onClick={analyzeSelectedBatch} disabled={selectedIds.size === 0 || busy} style={sbtn(selectedIds.size > 0 && !busy, "#8e44ad")}>🧠 선택 각각 분석</button>
-                <button onClick={analyzeFlowSelected} disabled={selectedIds.size < 2 || busy} style={sbtn(selectedIds.size >= 2 && !busy, "#2e7d32")}>{flowLoading ? "흐름분석 중…" : "🔗 흐름분석"}</button>
-              </>
-            )}
+            <button onClick={analyzeSelectedBatch} disabled={selectedIds.size === 0} style={sbtn(selectedIds.size > 0, "#8e44ad")}>🧠 선택 각각 분석{queued ? " (대기열)" : ""}</button>
+            <button onClick={analyzeFlowSelected} disabled={selectedIds.size < 2} style={sbtn(selectedIds.size >= 2, "#2e7d32")}>🔗 흐름분석{queued ? " (대기열)" : ""}</button>
             <span style={{ flex: 1 }} />
-            <button onClick={handleBulkSoftDelete} disabled={selectedIds.size === 0 || busy} style={sbtn(selectedIds.size > 0 && !busy, "#e74c3c")}>🗑️ 삭제</button>
+            <button onClick={handleBulkSoftDelete} disabled={selectedIds.size === 0} style={sbtn(selectedIds.size > 0, "#e74c3c")}>🗑️ 삭제</button>
           </div>
         ) : null;
 
