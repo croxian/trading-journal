@@ -10,6 +10,9 @@ create table if not exists flow_reviews (
   created_at timestamptz default now()
 );
 
+-- 휴지통(10일 후 자동 영구삭제)용. 이미 테이블을 만든 경우 이 줄만 실행해도 됩니다.
+alter table flow_reviews add column if not exists deleted_at timestamptz;
+
 alter table flow_reviews enable row level security;
 
 drop policy if exists flow_reviews_all on flow_reviews;
