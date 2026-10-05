@@ -680,14 +680,39 @@ const MD = ({ text, onTradeLink }) => {
       : <span key={i}>{lk[1]}</span>;
     return <span key={i}>{p}</span>;
   });
-  return <>{String(text).split("\n").map((ln, i) => {
+  const lines = String(text).split("\n");
+  const out = [];
+  const isRow = (s) => /^\s*\|.*\|\s*$/.test(s);
+  const cells = (s) => s.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    // 마크다운 표 → 행마다 카드(첫 칸 = 제목, 나머지 = '헤더: 값'). 좁은 화면에서도 읽히도록 세로로 풀어 표시
+    if (isRow(ln) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+      const head = cells(ln);
+      let j = i + 2;
+      while (j < lines.length && isRow(lines[j])) {
+        const row = cells(lines[j]);
+        out.push(
+          <div key={`t${j}`} style={{ border: "1px solid #2a3a4a", borderRadius: 8, padding: "8px 10px", margin: "6px 0", background: "#141a24" }}>
+            <div style={{ fontWeight: 700, color: "#fff", fontSize: 13, marginBottom: 4 }}>{inline(row[0])}</div>
+            {row.slice(1).map((c, k) => c && (
+              <div key={k} style={{ marginBottom: 3 }}><span style={{ color: "#8ab4f8", fontWeight: 600 }}>{head[k + 1] || ""}</span>{head[k + 1] ? ": " : ""}{inline(c)}</div>
+            ))}
+          </div>
+        );
+        j++;
+      }
+      i = j - 1;
+      continue;
+    }
     const h = ln.match(/^(#{1,4})\s+(.*)$/);
-    if (h) return <div key={i} style={{ fontWeight: 700, color: "#fff", fontSize: h[1].length <= 2 ? 15 : 13, marginTop: i ? 10 : 0, marginBottom: 4 }}>{inline(h[2])}</div>;
+    if (h) { out.push(<div key={i} style={{ fontWeight: 700, color: "#fff", fontSize: h[1].length <= 2 ? 15 : 13, marginTop: i ? (h[1].length >= 3 ? 14 : 10) : 0, marginBottom: 4 }}>{inline(h[2])}</div>); continue; }
     const b = ln.match(/^\s*[-*]\s+(.*)$/);
-    if (b) return <div key={i} style={{ display: "flex", gap: 6, marginBottom: 3 }}><span style={{ color: "#8e44ad", flexShrink: 0 }}>•</span><span>{inline(b[1])}</span></div>;
-    if (ln.trim() === "") return <div key={i} style={{ height: 6 }} />;
-    return <div key={i} style={{ marginBottom: 3 }}>{inline(ln)}</div>;
-  })}</>;
+    if (b) { out.push(<div key={i} style={{ display: "flex", gap: 6, marginBottom: 3 }}><span style={{ color: "#8e44ad", flexShrink: 0 }}>•</span><span>{inline(b[1])}</span></div>); continue; }
+    if (ln.trim() === "") { out.push(<div key={i} style={{ height: 6 }} />); continue; }
+    out.push(<div key={i} style={{ marginBottom: 3 }}>{inline(ln)}</div>);
+  }
+  return <>{out}</>;
 };
 
 const useIsMobile = () => {
@@ -2146,7 +2171,12 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
         `[강의록 목록]\n${techSummary || "(없음)"}\n\n` +
         `분석 방향(마크다운):\n` +
         `## 1. 흐름 요약 (이 종목/테마에서 기간 동안 무슨 일이 있었고, 내 대응이 어떻게 전개됐는지)\n` +
-        `## 2. 강사 흐름 대비 내 흐름 — 날짜별 표(날짜 | 강사 대응 | 내 대응 | 차이)로 진입·재진입·이탈 타이밍을 비교. '내 기록 없음' 날은 놓친 구간으로 짚고, 강사는 안 했는데 나만 한 매매는 근거가 있었는지 판단. 강사 매매가 없으면 이 섹션은 한 줄로 생략\n` +
+        `## 2. 강사 흐름 대비 내 흐름 — 진입·재진입·이탈 타이밍 비교. 표 금지, 날짜마다 아래 '카드' 형식으로 쓸 것:\n` +
+        `   ### MM/DD 판정이모지 핵심 차이 한 줄(15자 안팎)\n` +
+        `   - 🎓 강사: 실제 대응 1~2줄(가격·시간 위주, 근거 카톡은 핵심 한 구절만 인용)\n` +
+        `   - 🙋 나: 실제 대응 1~2줄(해당 매매는 [YYYY-MM-DD 종목명](t:ID) 링크)\n` +
+        `   - 💡 교훈: 다음에 할 행동 한 줄\n` +
+        `   판정이모지: ✅ 교본과 일치 / ⚠️ 일부 차이 / ❌ 크게 어긋남 / 🔍 강사만 매매(놓친 구간) / ➖ 나만 매매(교본 근거 확인). 강사 매매가 없으면 이 섹션은 한 줄로 생략\n` +
         `## 3. 포지션·판단 전개 (같은 종목이면 첫 진입→추가/청산→재진입의 일관성; 같은 테마 여러 종목이면 종목 선택·순환매 타이밍이 강의록 기법에 맞았는지)\n` +
         `## 4. 흐름 속 반복 실수 / 잘한 점 (개별 매매를 [YYYY-MM-DD 종목명](t:ID) 링크로 인용)\n` +
         `## 5. 다음에 같은 흐름을 만나면 — 체크리스트\n\n` +
