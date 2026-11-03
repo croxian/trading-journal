@@ -26,3 +26,7 @@ dist-ssr
 .pykrx_tmp/
 scripts/*.log
 scripts/market_out.json
+
+# 세트 일괄분석 진행 기록
+backfill_sets_progress.json
+scripts/__pycache__/
