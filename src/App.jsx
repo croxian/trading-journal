@@ -1331,8 +1331,9 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
     }
   };
 
-  const openDetail = async (trade) => {
-    window.history.pushState({ ...(window.history.state || {}), journalView: "detail", journalId: trade.id }, "");
+  // replace: 같은 세트 안에서 기록 간 이동은 한 페이지로 취급 → 히스토리를 쌓지 않고 교체(뒤로가기 한 번에 세트 밖으로)
+  const openDetail = async (trade, { replace = false } = {}) => {
+    window.history[replace ? "replaceState" : "pushState"]({ ...(window.history.state || {}), journalView: "detail", journalId: trade.id }, "");
     setSelected(trade); setView("detail"); setFeedback(""); setEditTrade(false);
     restoreAnalysisFor(trade, trades);
     setDetailImgLoading(true);
@@ -2998,7 +2999,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
                       const miss = !isObserveTrade(t) && (!t.buyPrice || !t.sellPrice || !t.amount);
                       const mk = (setRow?.markers || []).filter(m => m.trade_id === t.id);
                       return (
-                        <div key={t.id} onClick={() => { if (!cur) openDetail(t); }}
+                        <div key={t.id} onClick={() => { if (!cur) openDetail(t, { replace: true }); }}
                           style={{ padding: "6px 8px", borderRadius: 6, marginBottom: 4, cursor: cur ? "default" : "pointer", background: cur ? "#1f2a3d" : "transparent", border: `1px solid ${cur ? "#4f8ef7" : "#2a2d3a"}` }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 12.5 }}>
                             <span style={{ color: "#888", fontWeight: 700 }}>{i + 1}</span>
