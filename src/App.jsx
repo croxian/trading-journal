@@ -1836,7 +1836,8 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
           marketSection, liveSection, sameStockLiveNote, pastTrades, correctionsCtx,
         }) },
       ];
-      const result = await claude(SET_SYSTEM, content, 24000, undefined, AI_MODEL, AI_EFFORT);
+      // 세트 분석은 추론+기록별 6항목이 길어 24000에서 끝(DATA)이 잘린 사례가 있어 여유 있게
+      const result = await claude(SET_SYSTEM, content, 48000, undefined, AI_MODEL, AI_EFFORT);
       const parsed = parseSetResult(result, labels);
 
       // 7. 저장: 체결 순서·B/S 배정·세트 흐름 → trade_sets / 기록별 분석 → 각 매매 ai_analysis

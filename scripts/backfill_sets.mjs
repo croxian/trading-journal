@@ -13,6 +13,7 @@ const API_KEY = ENV.match(/^\s*VITE_ANTHROPIC_KEY\s*=\s*["']?([^"'\r\n]+)/m)[1].
 const MODEL = APP.match(/const AI_MODEL = "([^"]+)"/)[1];
 const EFFORT = APP.match(/const AI_EFFORT = "([^"]+)"/)[1];
 const FALLBACK = "claude-fable-5-1";
+const MAX_TOKENS = 48000;   // 세트 분석은 추론+기록별 6항목이 길어 24000에서 끝(DATA)이 잘린 사례 있음
 const HDR = { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, "Content-Type": "application/json" };
 
 const arg = (k) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : null; };
@@ -21,7 +22,7 @@ const ONLY = arg("--only");
 const PROGRESS = arg("--progress") || "backfill_sets_progress.json";
 
 const sb = async (q, opt = {}) => {
-  const r = await fetch(`${SB_URL}/rest/v1/${q}`, { headers: { ...HDR, ...(opt.headers || {}) }, ...opt });
+  const r = await fetch(`${SB_URL}/rest/v1/${q}`, { ...opt, headers: { ...HDR, ...(opt.headers || {}) } });   // 인증 헤더가 opt.headers에 덮이지 않게 마지막에
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
   return r.status === 204 || opt.method === "PATCH" || opt.method === "POST" ? null : r.json();
 };
@@ -46,14 +47,33 @@ const DAY_NAMES = ["일", "월", "화", "수", "목", "금", "토"];
 const withLec = (text, id) => (id ? `${text}\n<!--LEC:${id}-->` : text);
 
 const claude = async (content) => {
+  // 스트리밍(SSE): 추론+본문이 길어 응답이 5분을 넘을 수 있어, 비스트리밍 대기 타임아웃을 피함
   const post = async (model, eff) => {
     for (let a = 0; a < 4; a++) {
       const r = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "content-type": "application/json", "anthropic-version": "2023-06-01", "x-api-key": API_KEY },
-        body: JSON.stringify({ model, max_tokens: 24000, system: SET_SYSTEM, messages: [{ role: "user", content }], ...(eff ? { output_config: { effort: eff } } : {}) }),
+        body: JSON.stringify({ model, max_tokens: MAX_TOKENS, stream: true, system: SET_SYSTEM, messages: [{ role: "user", content }], ...(eff ? { output_config: { effort: eff } } : {}) }),
       });
-      if (r.ok) { const d = await r.json(); return { text: d.content.map(b => b.text || "").join(""), stop: d.stop_reason, usage: d.usage, model }; }
+      if (r.ok) {
+        let text = "", stop = null, usage = {}, buf = "";
+        const dec = new TextDecoder();
+        for await (const chunk of r.body) {
+          buf += dec.decode(chunk, { stream: true });
+          let i;
+          while ((i = buf.indexOf("\n\n")) >= 0) {
+            const ev = buf.slice(0, i); buf = buf.slice(i + 2);
+            const line = ev.split("\n").find(l => l.startsWith("data: "));
+            if (!line) continue;
+            const d = JSON.parse(line.slice(6));
+            if (d.type === "message_start") usage = { ...d.message.usage };
+            else if (d.type === "content_block_delta" && d.delta?.type === "text_delta") text += d.delta.text;
+            else if (d.type === "message_delta") { stop = d.delta?.stop_reason ?? stop; usage = { ...usage, ...d.usage }; }
+            else if (d.type === "error") throw new Error(`stream error ${JSON.stringify(d.error).slice(0, 200)}`);
+          }
+        }
+        return { text, stop, usage, model };
+      }
       if ([429, 500, 529].includes(r.status) && a < 3) { await new Promise(s => setTimeout(s, 15000 * (a + 1))); continue; }
       throw new Error(`API ${r.status} ${(await r.text()).slice(0, 200)}`);
     }
@@ -175,6 +195,7 @@ for (const [si, members] of todo.entries()) {
       continue;
     }
     const r = await claude(content);
+    if (r.stop === "max_tokens") throw new Error(`출력 한도(${MAX_TOKENS}) 도달 — 응답이 잘려 저장하지 않음`);
     const parsed = parseSetResult(r.text, labels);
     const idOfLabel = Object.fromEntries(members.map((t, i) => [labels[i], t.id]));
     const seqIds = [...parsed.sequence.map(l => idOfLabel[l]), ...ids.filter(id => !parsed.sequence.some(l => idOfLabel[l] === id))];
