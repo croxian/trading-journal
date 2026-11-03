@@ -19,6 +19,7 @@ const HDR = { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, "Content-Type":
 const arg = (k) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : null; };
 const LIMIT = parseInt(arg("--limit") || "0") || Infinity;
 const ONLY = arg("--only");
+const SINCE = arg("--since");   // 예: 2026-02-01 (그 이전 세트 제외)
 const PROGRESS = arg("--progress") || "backfill_sets_progress.json";
 
 const sb = async (q, opt = {}) => {
@@ -120,7 +121,7 @@ for (const t of [...trades].sort((a, b) => a.id - b.id)) {
 }
 const keyOf = (ms) => `${ms[0].date}|${ms[0].stock}`;
 const progress = fs.existsSync(PROGRESS) ? JSON.parse(fs.readFileSync(PROGRESS, "utf8")) : { done: {}, cost: 0 };
-const todo = sets.filter(ms => (!ONLY || keyOf(ms) === ONLY) && !progress.done[keyOf(ms)]).slice(0, LIMIT);
+const todo = sets.filter(ms => (!ONLY || keyOf(ms) === ONLY) && (!SINCE || ms[0].date >= SINCE) && !progress.done[keyOf(ms)]).slice(0, LIMIT);
 console.log(`세트 ${sets.length}개 중 처리 대상 ${todo.length}개 (완료 ${Object.keys(progress.done).length}) · 모델 ${MODEL}@${EFFORT}`);
 
 for (const [si, members] of todo.entries()) {
