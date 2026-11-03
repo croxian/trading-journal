@@ -1243,7 +1243,6 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
   const [editTrade, setEditTrade] = useState(false);
   const [editForm, setEditForm] = useState(null);
   const [editImgLoading, setEditImgLoading] = useState(false);
-  const [sel0397, setSel0397] = useState(new Set());
   const [expanded0397, setExpanded0397] = useState(null);
   const [pendingPpt, setPendingPpt] = useState([]);
   const [pptLoading, setPptLoading] = useState(false);
@@ -1466,42 +1465,16 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
         setForm(f => ({ ...f, stock: p.stock || "" }));
         setFeedback("✅ 차트 정보 추출 완료");
       } else {
-        const raw = await claude("JSON만 출력.", [
-          { type: "image", source: { type: "base64", media_type: mediaType, data: b64 } },
-          { type: "text", text: `키움 [0328] 매매일지에서 JSON 추출. 먼저 테이블에 보이는 데이터 행의 총 개수를 정확히 세어라. trades 배열의 길이는 그 개수와 반드시 일치해야 한다. 동일 종목이 여러 행에 걸쳐 있고 값이 비슷하거나 같아도 절대 합치거나 생략하지 말고 행마다 개별 객체로 모두 포함. 종목명이 첫 행에만 표시되고 이후 행이 비어있는 경우(셀 병합) 위 행과 동일한 종목명으로 채워서 출력. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"rowCount":보이는행개수,"date":"YYYY-MM-DD 또는 null","trades":[{"date":"YYYY-MM-DD 또는 null","stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}` }
-        ], 4096, 0);
-        const p = await parseJSON(raw);
-        const tradeList = fillMergedStockCells(Array.isArray(p) ? p : (p.trades || []));
-        const extractedDate = (!Array.isArray(p) && p.date && p.date !== "null") ? p.date : "";
-        const rowCountWarn = (!Array.isArray(p) && p.rowCount && p.rowCount !== tradeList.length) ? ` ⚠️ 행 개수 불일치(이미지 ${p.rowCount}행 vs 추출 ${tradeList.length}행) - 다시 시도해보세요` : "";
+        // 0328: 행을 합치지 않고 종목별 그룹으로 → 행마다 기법 지정, 같은 기법 행만 저장 시 합침
+        const { trades: tradeList, rowCount, date: extractedDate } = await extract0397Trades(file);
+        const rowCountWarn = (rowCount && rowCount !== tradeList.length) ? ` ⚠️ 행 개수 불일치(이미지 ${rowCount}행 vs 추출 ${tradeList.length}행) - 다시 시도해보세요` : "";
         if (tradeList.length > 0) {
-          // 날짜 보정: 행별 date 없으면 상위 date 사용
-          const filled = tradeList.map(f => ({
-            ...f,
-            date: (f.date && f.date !== "null") ? f.date : (extractedDate || null),
-          }));
-          // 종목+날짜 기준으로 그룹화 후 merge0397Rows(수정 탭과 동일 로직) 적용
-          const groups = [];
-          filled.forEach(f => {
-            const g = groups.find(g => matchStock(g[0].stock, f.stock) && g[0].date === f.date);
-            if (g) g.push(f); else groups.push([f]);
-          });
-          const merged = groups.map(g => {
-            const m = merge0397Rows(g);
-            return {
-              stock: m.stock || "",
-              date: m.date || "",
-              buyPrice: m.buyPrice ?? "",
-              sellPrice: m.sellPrice ?? "",
-              pnl: m.pnl ?? "",
-              pnlRate: m.pnlRate ?? "",
-              amount: m.buyAmount ?? "",
-            };
-          });
-          setPending0397(merged);
+          const groups = toPendingGroups(tradeList, extractedDate);
+          setPending0397(groups);
+          setExpanded0397(groups.length === 1 ? 0 : null);
           setBulk0397Date(extractedDate || new Date().toISOString().slice(0, 10));
-          const mergeNote = merged.length < filled.length ? ` (${filled.length}행 → ${merged.length}종목 자동 머지)` : "";
-          setFeedback(`✅ ${merged.length}개 종목 추출 완료${mergeNote}${rowCountWarn}`);
+          const multi = groups.filter(g => g.rows.length > 1).length;
+          setFeedback(`✅ ${groups.length}개 종목 · ${tradeList.length}행 추출${multi ? ` — 행이 여러 개인 종목 ${multi}개는 펼쳐서 행마다 기법을 지정하세요` : ""}${rowCountWarn}`);
         } else {
           setFeedback("❌ 추출된 종목 없음");
         }
@@ -1573,15 +1546,22 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
     setFeedback("");
     const base = Date.now();
     try {
-      const newTrades = pending0397.map((t, i) => ({
-        ...t, date: t.date || bulk0397Date, id: base + i,
-        createdAt: new Date().toLocaleDateString("ko-KR"),
-        chartImg: t.chartImg || null, aiAnalysis: "", reason: t.reason || "", technique: t.technique || "", memo: t.memo || "", chartDesc: t.chartDesc || "",
-      }));
+      // 종목 그룹 × 기법 = 매매 1건(같은 기법 행만 합침). 같은 날 같은 종목 기록들은 자동으로 세트가 됨
+      const newTrades = pending0397.flatMap(g => groupRecords(g).map(({ tech, rows, merged }) => {
+        const meta = g.meta?.[tech] || {};
+        const notes = rows.map((r, k) => r.note ? `행${g.rows.indexOf(r) + 1 || k + 1}: ${r.note}` : "").filter(Boolean);
+        return {
+          stock: g.stock, date: g.date || bulk0397Date,
+          buyPrice: merged.buyPrice ?? "", sellPrice: merged.sellPrice ?? "", pnl: merged.pnl ?? "", pnlRate: merged.pnlRate ?? "", amount: merged.buyAmount ?? "",
+          technique: tech, reason: meta.reason || "",
+          memo: [meta.memo, notes.length ? `[0328 ${rows.length}행 중 메모] ${notes.join(" / ")}` : ""].filter(Boolean).join("\n"),
+          chartImg: g.chartImg || null, chartDesc: "",
+        };
+      })).map((t, i) => ({ ...t, id: base + i, createdAt: new Date().toLocaleDateString("ko-KR"), aiAnalysis: "" }));
       await sbUpsert("trades", newTrades.map(tradeToRow));
       setTrades(p => [...[...newTrades].reverse(), ...p]);
-      setPending0397([]);
-      setFeedback(`✅ ${newTrades.length}개 저장됨`);
+      setPending0397([]); setExpanded0397(null);
+      setFeedback(`✅ ${newTrades.length}개 저장됨${newTrades.length > pending0397.length ? " (기법별로 나뉜 기록은 같은 날 세트로 묶임)" : ""}`);
       setView("list");
     } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
@@ -1600,12 +1580,13 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
     const b64 = await compressImageForOCR(file);
     const raw = await claude("JSON만 출력.", [
       { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
-      { type: "text", text: `키움 [0328] 매매일지 테이블에서 JSON 추출.\n\n[중요] 종목명은 한국 주식 종목명이다. 픽셀을 정밀하게 읽어 한 글자씩 정확히 인식할 것. 비슷하게 생긴 한글 자모를 혼동하지 말 것(예: ㅎ↔ㄹ, ㅇ↔ㅁ, 흥↔홀, 아↔마 등). 의심스러우면 여러 번 확인 후 가장 그럴듯한 한국 주식 종목명으로 출력.\n\n먼저 테이블에 보이는 데이터 행의 총 개수를 정확히 세어라. trades 배열의 길이는 그 개수와 반드시 일치해야 한다. 동일 종목이 여러 행에 걸쳐 있고 값이 비슷하거나 같아도 절대 합치거나 생략하지 말고 행마다 개별 객체로 모두 포함. 종목명이 첫 행에만 표시되고 이후 행이 비어있는 경우(셀 병합) 위 행과 동일한 종목명으로 채워서 출력. 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"rowCount":보이는행개수,"date":"YYYY-MM-DD 또는 null","trades":[{"date":"YYYY-MM-DD 또는 null","stock":"종목명","buyPrice":매수가,"sellPrice":매도가,"pnl":실현손익,"pnlRate":수익률,"buyAmount":매입금액}]}` }
+      { type: "text", text: `키움 [0328] 매매일지 테이블에서 JSON 추출.\n\n[중요] 종목명은 한국 주식 종목명이다. 픽셀을 정밀하게 읽어 한 글자씩 정확히 인식할 것. 비슷하게 생긴 한글 자모를 혼동하지 말 것(예: ㅎ↔ㄹ, ㅇ↔ㅁ, 흥↔홀, 아↔마 등). 의심스러우면 여러 번 확인 후 가장 그럴듯한 한국 주식 종목명으로 출력.\n\n먼저 테이블에 보이는 데이터 행의 총 개수를 정확히 세어라. trades 배열의 길이는 그 개수와 반드시 일치해야 한다. 동일 종목이 여러 행에 걸쳐 있고 값이 비슷하거나 같아도 절대 합치거나 생략하지 말고 행마다 개별 객체로 모두 포함(행 순서 유지). 종목명이 첫 행에만 표시되고 이후 행이 비어있는 경우(셀 병합) 위 행과 동일한 종목명으로 채워서 출력.\n열 대응: 매입가→buyPrice, 매도체결가→sellPrice, 실현손익→pnl, 수익률→pnlRate, 매입금액→buyAmount, 매도금액→sellAmount (숫자만, 콤마 없이, 음수는 -). 컴팩트 JSON(줄바꿈 없이)으로 출력:\n{"rowCount":보이는행개수,"date":"YYYY-MM-DD 또는 null","trades":[{"date":"YYYY-MM-DD 또는 null","stock":"종목명","buyPrice":0,"sellPrice":0,"pnl":0,"pnlRate":0,"buyAmount":0,"sellAmount":0}]}` }
     ], 4096, 0);
     const p = await parseJSON(raw);
     const trades = fillMergedStockCells(Array.isArray(p) ? p : (p.trades || []));
     const rowCount = !Array.isArray(p) ? p.rowCount : undefined;
-    return { trades, rowCount };
+    const date = (!Array.isArray(p) && p.date && p.date !== "null") ? p.date : "";
+    return { trades, rowCount, date };
   };
 
   const matchStock = (a, b) => {
@@ -1617,24 +1598,46 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
     return n(a) === n(b) || n(a).includes(n(b)) || n(b).includes(n(a));
   };
 
+  // 0328 행 합치기(같은 기법 구간): 수량 = 매입금액 ÷ 매입가, 평균매수가 = Σ매입금액 ÷ Σ수량, 평균매도가 = Σ매도금액 ÷ Σ수량
+  // (매도금액이 없으면 수량 × 매도체결가). 수량을 못 구하면 단순평균으로 폴백
   const merge0397Rows = (rows) => {
     if (!rows || rows.length === 0) return null;
     if (rows.length === 1) return rows[0];
-    const totalBuyAmt = rows.reduce((s, t) => s + (parseFloat(t.buyAmount) || 0), 0);
-    const totalPnl    = rows.reduce((s, t) => s + (parseFloat(t.pnl)       || 0), 0);
-    const wavg = (key) => totalBuyAmt > 0
-      ? rows.reduce((s, t) => s + (parseFloat(t[key]) || 0) * (parseFloat(t.buyAmount) || 0), 0) / totalBuyAmt
-      : rows.reduce((s, t) => s + (parseFloat(t[key]) || 0), 0) / rows.length;
+    const n = (v) => parseFloat(String(v ?? "").replace(/,/g, "")) || 0;
+    const qty = (t) => (n(t.buyAmount) && n(t.buyPrice) ? n(t.buyAmount) / n(t.buyPrice) : 0);
+    const totalBuyAmt = rows.reduce((s, t) => s + n(t.buyAmount), 0);
+    const totalQty = rows.reduce((s, t) => s + qty(t), 0);
+    const totalSellAmt = rows.reduce((s, t) => s + (n(t.sellAmount) || qty(t) * n(t.sellPrice)), 0);
+    const totalPnl = rows.reduce((s, t) => s + n(t.pnl), 0);
+    const avg = (key) => rows.reduce((s, t) => s + n(t[key]), 0) / rows.length;
     return {
       ...rows[0],
-      buyPrice:  Math.round(wavg("buyPrice")),
-      sellPrice: Math.round(wavg("sellPrice")),
+      buyPrice:  Math.round(totalQty > 0 ? totalBuyAmt / totalQty : avg("buyPrice")),
+      sellPrice: Math.round(totalQty > 0 ? totalSellAmt / totalQty : avg("sellPrice")),
       buyAmount: Math.round(totalBuyAmt),
+      sellAmount: Math.round(totalSellAmt),
       pnl:       Math.round(totalPnl),
-      pnlRate:   totalBuyAmt > 0
-        ? parseFloat((totalPnl / totalBuyAmt * 100).toFixed(2))
-        : parseFloat((rows.reduce((s,t) => s + (parseFloat(t.pnlRate)||0), 0) / rows.length).toFixed(2)),
+      pnlRate:   totalBuyAmt > 0 ? parseFloat((totalPnl / totalBuyAmt * 100).toFixed(2)) : parseFloat(avg("pnlRate").toFixed(2)),
     };
+  };
+  // 대기 중인 종목 그룹 → 기법별 기록(같은 기법 행끼리만 합침). 행 순서대로 기법 첫 등장 순
+  const groupRecords = (g) => {
+    const techs = [...new Set(g.rows.map(r => r.tech || ""))];
+    return techs.map(tech => {
+      const rows = g.rows.filter(r => (r.tech || "") === tech);
+      return { tech, rows, merged: merge0397Rows(rows) };
+    });
+  };
+  // 0328 추출 행 → 종목·날짜별 그룹(합치지 않음). 행마다 기법(tech)·메모(note), 기법별 이유(meta)
+  const toPendingGroups = (rows, fallbackDate, init = {}) => {
+    const groups = [];
+    rows.forEach(r => {
+      const date = (r.date && r.date !== "null") ? r.date : (fallbackDate || "");
+      let g = groups.find(g => matchStock(g.stock, r.stock) && g.date === date);
+      if (!g) { g = { stock: r.stock || "", date, chartImg: init.chartImg || null, rows: [], meta: init.meta || {} }; groups.push(g); }
+      g.rows.push({ buyPrice: r.buyPrice ?? "", sellPrice: r.sellPrice ?? "", pnl: r.pnl ?? "", pnlRate: r.pnlRate ?? "", buyAmount: r.buyAmount ?? "", sellAmount: r.sellAmount ?? "", tech: init.tech || "", note: "" });
+    });
+    return groups;
   };
 
   const calcSimilarTrades = (trade, allTrades) => {
@@ -1674,11 +1677,27 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
   const fillFormFrom0397 = async (file) => {
     setFill0397Loading(true); setFeedback("");
     try {
-      const { trades, rowCount } = await extract0397Trades(file);
+      const { trades, rowCount, date: extractedDate } = await extract0397Trades(file);
       const rowCountWarn = (rowCount && rowCount !== trades.length) ? ` ⚠️ 행 개수 불일치(이미지 ${rowCount}행 vs 추출 ${trades.length}행) - 다시 시도해보세요` : "";
       const matches = form.stock
         ? trades.filter(t => matchStock(t.stock, form.stock))
         : trades.slice(0, 1);
+      // 0606 먼저 입력 + 같은 종목 0328 행이 여러 개 → 행별 기법 지정 화면으로 전환(차트·작성 중인 이유/기법 이어받음)
+      if (matches.length > 1) {
+        const tech = form.technique || "";
+        const groups = toPendingGroups(matches.map(m => ({ ...m, stock: form.stock || m.stock })), form.date || extractedDate, {
+          chartImg, tech, meta: (form.reason || form.memo) ? { [tech]: { reason: form.reason || "", memo: form.memo || "" } } : {},
+        });
+        setPending0397(groups);
+        setExpanded0397(0);
+        setBulk0397Date(form.date || extractedDate || new Date().toISOString().slice(0, 10));
+        setChartImg(null);
+        setForm({ stock: "", date: "", buyPrice: "", sellPrice: "", amount: "", pnl: "", pnlRate: "", reason: "", technique: "", memo: "", chartDesc: "" });
+        setInputMode("img0397");
+        setFeedback(`✅ '${groups[0].stock}' 0328 ${matches.length}행 — 행마다 기법을 지정하면 같은 기법끼리만 합쳐 저장됩니다${rowCountWarn}`);
+        setFill0397Loading(false);
+        return;
+      }
       const match = merge0397Rows(matches);
       if (match) {
         setForm(f => ({
@@ -1962,64 +1981,6 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
       setFeedback("✅ 차트 정보 추출 완료");
     } catch (e) { setFeedback(`❌ ${e.message}`); }
     setEditImgLoading(false);
-  };
-
-  const autoMergeByStock = (rows) => {
-    const groups = [];
-    rows.forEach(r => {
-      const g = groups.find(g => matchStock(g[0].stock, r.stock) && g[0].date === r.date);
-      if (g) g.push(r); else groups.push([r]);
-    });
-    return groups.map(g => {
-      if (g.length === 1) return g[0];
-      const totalAmt = g.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
-      const totalPnl = g.reduce((s, r) => s + (parseFloat(r.pnl) || 0), 0);
-      const wavg = (key) => totalAmt > 0
-        ? g.reduce((s, r) => s + (parseFloat(r[key]) || 0) * (parseFloat(r.amount) || 0), 0) / totalAmt
-        : g.reduce((s, r) => s + (parseFloat(r[key]) || 0), 0) / g.length;
-      return {
-        ...g[0],
-        buyPrice: Math.round(wavg("buyPrice")),
-        sellPrice: Math.round(wavg("sellPrice")),
-        pnl: Math.round(totalPnl),
-        pnlRate: totalAmt > 0
-          ? parseFloat((totalPnl / totalAmt * 100).toFixed(2))
-          : parseFloat((g.reduce((s, r) => s + (parseFloat(r.pnlRate) || 0), 0) / g.length).toFixed(2)),
-        amount: Math.round(totalAmt),
-      };
-    });
-  };
-
-  const mergePending = () => {
-    if (sel0397.size < 2) return;
-    const idxs = [...sel0397].sort((a, b) => a - b);
-    const rows = idxs.map(i => pending0397[i]);
-    const totalAmt = rows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
-    const totalPnl = rows.reduce((s, r) => s + (parseFloat(r.pnl) || 0), 0);
-    // 기법 구간 단가는 수량 가중평균(수량 = 매입금액 ÷ 매수가). 금액 정보가 없으면 단순평균으로 폴백
-    const qty = (r) => (parseFloat(r.amount) || 0) / (parseFloat(r.buyPrice) || Infinity);
-    const totalQty = rows.reduce((s, r) => s + qty(r), 0);
-    const wavg = (key) => totalQty > 0
-      ? rows.reduce((s, r) => s + (parseFloat(r[key]) || 0) * qty(r), 0) / totalQty
-      : rows.reduce((s, r) => s + (parseFloat(r[key]) || 0), 0) / rows.length;
-    const merged = {
-      stock: rows[0].stock,
-      date: rows[0].date,
-      buyPrice: Math.round(wavg("buyPrice")),
-      sellPrice: Math.round(wavg("sellPrice")),
-      pnl: Math.round(totalPnl),
-      pnlRate: parseFloat(totalAmt > 0 ? ((totalPnl / totalAmt) * 100).toFixed(2) : 0),
-      amount: Math.round(totalAmt),
-    };
-    const next = [];
-    let inserted = false;
-    pending0397.forEach((r, i) => {
-      if (i === idxs[0] && !inserted) { next.push(merged); inserted = true; }
-      if (!sel0397.has(i)) next.push(r);
-    });
-    if (!inserted) next.push(merged);
-    setPending0397(next);
-    setSel0397(new Set());
   };
 
   const handleEditSave = async () => {
@@ -2539,35 +2500,45 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
           ) : inputMode === "img0397" ? (
             pending0397.length > 0 ? (
               <div style={{ ...box, marginBottom: 14 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>추출된 매매 ({pending0397.length}건)</div>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>추출된 종목 ({pending0397.length}개 · 저장 시 {pending0397.reduce((s, g) => s + groupRecords(g).length, 0)}건)</div>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
                   <span style={{ fontSize: 12, color: "#888" }}>날짜</span>
                   <input type="date" value={bulk0397Date} onChange={e => setBulk0397Date(e.target.value)}
                     style={{ background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "6px 10px", fontSize: 13, colorScheme: "dark" }} />
                 </div>
                 <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
-                  {pending0397.map((t, i) => {
+                  {pending0397.map((g, i) => {
                     const isOpen = expanded0397 === i;
+                    const recs = groupRecords(g);
+                    const n = v => parseFloat(String(v ?? "").replace(/,/g, "")) || 0;
+                    const won = v => `${n(v) > 0 ? "+" : ""}${Math.round(n(v)).toLocaleString()}`;
+                    const totPnl = g.rows.reduce((s, r) => s + n(r.pnl), 0), totAmt = g.rows.reduce((s, r) => s + n(r.buyAmount), 0);
+                    const updG = (fn) => setPending0397(p => p.map((x, j) => j === i ? fn(x) : x));
+                    const setRow = (k, patch) => updG(x => ({ ...x, rows: x.rows.map((r, kk) => kk === k ? { ...r, ...patch } : r) }));
+                    const setMeta = (tech, patch) => updG(x => ({ ...x, meta: { ...(x.meta || {}), [tech]: { ...(x.meta?.[tech] || {}), ...patch } } }));
+                    const selStyle = { width: "100%", background: "#0f1117", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "5px 6px", fontSize: 12, boxSizing: "border-box" };
                     return (
                       <div key={i} style={{ background: "#13151f", borderRadius: 6, overflow: "hidden", border: `1px solid ${isOpen ? "#4f8ef7" : "transparent"}` }}>
                         <div onClick={() => setExpanded0397(p => p === i ? null : i)}
-                          style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", fontSize: 12, cursor: "pointer" }}>
-                          {t.chartImg && <span style={{ fontSize: 10, color: "#4f8ef7" }}>🖼️</span>}
-                          <span style={{ fontWeight: 600, minWidth: 80, color: "#ddd" }}>{t.stock}</span>
-                          {t.date && <span style={{ fontSize: 11, color: "#555" }}>{t.date}</span>}
-                          {t.technique && <span style={{ background: categoryColor(t.technique), fontSize: 10, padding: "1px 6px", borderRadius: 3, color: "#fff" }}>{t.technique}</span>}
-                          {t.reason && <span style={{ fontSize: 10, color: "#4f8ef7" }}>📝</span>}
-                          <span style={{ color: "#777" }}>매수 {t.buyPrice}</span>
-                          <span style={{ color: "#777" }}>매도 {t.sellPrice}</span>
-                          <span style={{ marginLeft: "auto", fontWeight: 700, color: pnlColor(parseFloat(t.pnlRate)) }}>
-                            {parseFloat(t.pnlRate) > 0 ? "+" : ""}{t.pnlRate}%
+                          style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", fontSize: 12, cursor: "pointer", flexWrap: "wrap" }}>
+                          {g.chartImg && <span style={{ fontSize: 10, color: "#4f8ef7" }}>🖼️</span>}
+                          <span style={{ fontWeight: 600, minWidth: 80, color: "#ddd" }}>{g.stock}</span>
+                          {g.date && <span style={{ fontSize: 11, color: "#555" }}>{g.date}</span>}
+                          <span style={{ color: "#777" }}>{g.rows.length}행</span>
+                          {recs.filter(r => r.tech).map(r => (
+                            <span key={r.tech} style={{ background: categoryColor(r.tech), fontSize: 10, padding: "1px 6px", borderRadius: 3, color: "#fff" }}>{r.tech}</span>
+                          ))}
+                          {g.rows.some(r => !r.tech) && <span style={{ fontSize: 11, color: "#f39c12" }}>기법 미지정 {g.rows.filter(r => !r.tech).length}행</span>}
+                          {recs.some(r => g.meta?.[r.tech]?.reason) && <span style={{ fontSize: 10, color: "#4f8ef7" }}>📝</span>}
+                          <span style={{ marginLeft: "auto", fontWeight: 700, color: pnlColor(totPnl) }}>
+                            {won(totPnl)}원{totAmt ? ` (${totPnl > 0 ? "+" : ""}${(totPnl / totAmt * 100).toFixed(2)}%)` : ""}
                           </span>
                           <button onClick={e => { e.stopPropagation(); setPending0397(p => p.filter((_, j) => j !== i)); if (expanded0397 === i) setExpanded0397(null); }}
                             style={{ background: "none", border: "none", color: "#e74c3c", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "0 2px" }}>✕</button>
                         </div>
                         {isOpen && (
                           <div style={{ borderTop: "1px solid #2a2d3a", padding: "10px 10px 10px" }}>
-                            {t.chartImg && <img src={`data:image/jpeg;base64,${t.chartImg}`} alt="chart" style={{ width: "100%", maxHeight: 160, objectFit: "contain", borderRadius: 6, marginBottom: 8, background: "#0f1117" }} />}
+                            {g.chartImg && <img src={`data:image/jpeg;base64,${g.chartImg}`} alt="chart" style={{ width: "100%", maxHeight: 160, objectFit: "contain", borderRadius: 6, marginBottom: 8, background: "#0f1117" }} />}
                             <div
                               tabIndex={0}
                               onClick={e => e.currentTarget.focus()}
@@ -2580,26 +2551,58 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
                               }}
                               style={{ padding: "6px 12px", background: "#2a2d3a", border: "1px dashed #4f8ef7", borderRadius: 6, cursor: "text", fontSize: 12, color: "#aaa", outline: "none", display: "flex", alignItems: "center", gap: 8 }}
                             >
-                              🖼️ 0606 차트 Ctrl+V
+                              🖼️ 0606 차트 Ctrl+V {recs.length > 1 && <span style={{ color: "#666", fontSize: 11 }}>(기법별 기록 {recs.length}건이 함께 사용)</span>}
                               <label style={{ marginLeft: 4, color: "#4f8ef7", cursor: "pointer", fontSize: 11 }} onClick={e => e.stopPropagation()}>
                                 파일선택
                                 <input type="file" accept="image/*" style={{ display: "none" }} onChange={async e => { const f = e.target.files[0]; if (f) { await attach0606ToPending(f, i); e.target.value = ""; } }} />
                               </label>
                             </div>
-                            <div style={{ marginTop: 8 }}>
-                              <div style={label11}>카테고리</div>
-                              <select value={t.technique || ""} onChange={e => setPending0397(p => p.map((r, j) => j === i ? { ...r, technique: e.target.value } : r))}
-                                style={{ width: "100%", background: "#0f1117", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "6px 8px", fontSize: 12 }}>
-                                <option value="">선택 안 함</option>
-                                {TRADE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                              </select>
+
+                            {/* 0328 행별 기법 지정 — 같은 기법 행끼리만 합쳐 1건으로 저장 */}
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, marginBottom: 4, flexWrap: "wrap" }}>
+                              <span style={{ ...label11, marginBottom: 0 }}>0328 행별 기법 — 같은 기법 행끼리만 합쳐 저장 (롤링·재매수는 행마다 지정)</span>
+                              {g.rows.length > 1 && (
+                                <select value="" onChange={e => { const v = e.target.value; if (v) updG(x => ({ ...x, rows: x.rows.map(r => ({ ...r, tech: v })) })); }}
+                                  style={{ ...selStyle, width: "auto", marginLeft: "auto" }}>
+                                  <option value="">전체 행 일괄 지정…</option>
+                                  {TRADE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                              )}
                             </div>
-                            <div style={{ marginTop: 8 }}>
-                              <div style={label11}>매매 이유</div>
-                              <textarea value={t.reason || ""} onChange={e => setPending0397(p => p.map((r, j) => j === i ? { ...r, reason: e.target.value } : r))}
-                                placeholder="왜 이 자리에서 매수/매도했는지..."
-                                style={{ width: "100%", minHeight: 60, background: "#0f1117", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: 8, fontSize: 12, resize: "vertical", boxSizing: "border-box" }} />
-                            </div>
+                            {g.rows.map((r, k) => (
+                              <div key={k} style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "minmax(0,1.7fr) minmax(0,1fr) minmax(0,1fr)", gap: 6, alignItems: "center", padding: "5px 0", borderBottom: "1px solid #1f2230" }}>
+                                <div style={{ fontSize: 12, color: "#bbb", gridColumn: isMobile ? "1 / -1" : "auto" }}>
+                                  <span style={{ color: "#666", marginRight: 6 }}>{k + 1}</span>
+                                  {fmtNum(r.buyPrice) || "-"} → {fmtNum(r.sellPrice) || "-"}
+                                  {n(r.buyAmount) > 0 && <span style={{ color: "#666", marginLeft: 6 }}>{Math.round(n(r.buyAmount) / 10000).toLocaleString()}만</span>}
+                                  <span style={{ marginLeft: 6, fontWeight: 600, color: pnlColor(n(r.pnl)) }}>{won(r.pnl)} ({r.pnlRate}%)</span>
+                                </div>
+                                <select value={r.tech || ""} onChange={e => setRow(k, { tech: e.target.value })} style={{ ...selStyle, borderColor: r.tech ? "#2a2d3a" : "#f39c1288" }}>
+                                  <option value="">기법 선택</option>
+                                  {TRADE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                                <input value={r.note || ""} onChange={e => setRow(k, { note: e.target.value })} placeholder="메모(섞임·롤링 등)" style={selStyle} />
+                              </div>
+                            ))}
+
+                            {/* 기법별 기록(저장 단위) + 매매 이유 */}
+                            {recs.map(rec => (
+                              <div key={rec.tech || "_"} style={{ marginTop: 10, padding: "8px 10px", background: "#0f1117", border: "1px solid #2a2d3a", borderRadius: 6 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 12, marginBottom: 6 }}>
+                                  {rec.tech
+                                    ? <span style={{ background: categoryColor(rec.tech), fontSize: 11, padding: "1px 7px", borderRadius: 4, color: "#fff" }}>{rec.tech}</span>
+                                    : <span style={{ color: "#f39c12" }}>기법 미지정</span>}
+                                  <span style={{ color: "#888" }}>
+                                    {rec.rows.length > 1 ? `${rec.rows.length}행 합산 · ` : ""}{fmtNum(rec.merged.buyPrice) || "-"} → {fmtNum(rec.merged.sellPrice) || "-"}
+                                    {n(rec.merged.buyAmount) > 0 ? ` · ${Math.round(n(rec.merged.buyAmount) / 10000).toLocaleString()}만` : ""}
+                                  </span>
+                                  <span style={{ marginLeft: "auto", fontWeight: 700, color: pnlColor(n(rec.merged.pnl)) }}>{won(rec.merged.pnl)}원 ({rec.merged.pnlRate}%)</span>
+                                </div>
+                                <textarea value={g.meta?.[rec.tech]?.reason || ""} onChange={e => setMeta(rec.tech, { reason: e.target.value })}
+                                  placeholder={`${rec.tech || "이 구간"} — 왜 이 자리에서 매수/매도했는지...`}
+                                  style={{ width: "100%", minHeight: 56, background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: 8, fontSize: 12, resize: "vertical", boxSizing: "border-box" }} />
+                              </div>
+                            ))}
                             {fill0397Loading && <span style={{ fontSize: 11, color: "#aaa", marginTop: 4, display: "block" }}>⏳ 추출 중...</span>}
                           </div>
                         )}
