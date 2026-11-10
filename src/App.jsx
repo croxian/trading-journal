@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
 import JSZip from "jszip";
 import * as XLSX from "xlsx";
-import { CHART_ANGLE_NOTE, CHART_TF_NOTE, SET_SYSTEM, buildStaticText, buildSetVariableText, parseSetResult } from "./setAnalysis.js";
+import { TRADE_CATEGORIES, CHART_ANGLE_NOTE, CHART_TF_NOTE, SET_SYSTEM, buildStaticText, buildSetVariableText, parseSetResult, withMissed, parseMissed, stripMissed } from "./setAnalysis.js";
 
 // ==================== 상수 / 설정 ====================
 const TABS = ["🏠 대시보드", "📝 매매일지", "📊 통계", "📚 강의록", "🔴 실전매매", "📅 월간복기"];
@@ -268,22 +268,7 @@ const tradeToRow = (t) => ({ id: t.id, stock: t.stock, date: t.date, buy_price: 
 const rowToTrade = (r) => ({ id: r.id, stock: r.stock, date: r.date, buyPrice: r.buy_price, sellPrice: r.sell_price, amount: r.amount, pnl: r.pnl, pnlRate: r.pnl_rate, reason: r.reason, technique: r.technique, memo: r.memo, chartImg: r.chart_img, aiAnalysis: r.ai_analysis, chartDesc: r.chart_desc, createdAt: r.created_at, deletedAt: r.deleted_at || null });
 
 // ==================== 매매 카테고리 ====================
-const TRADE_CATEGORIES = [
-  "상따",
-  "양봉종배",
-  "음봉매매-시초",
-  "음봉매매-종배",
-  "상한가하락시작-시초",
-  "장중매매-돌파",
-  "장중매매-눌림지지",
-  "투매-시초",
-  "투매-종가",
-  "투경해제",
-  "단기과열",
-  "무증매매",
-  "악재매매",
-  "기타",
-];
+// TRADE_CATEGORIES(기본 기법 목록)는 setAnalysis.js에서 import (세트 분석 프롬프트와 공용)
 const BASE_TECHS = TRADE_CATEGORIES.filter(c => c !== "기타");
 // '기타'에서 직접 입력해 저장한 기법들(매매 기록에서 수집) — 다음부터 선택지로 재사용
 const customTechsOf = (techs) => [...new Set(techs.filter(t => t && t !== "기타" && !TRADE_CATEGORIES.includes(t)))].sort((a, b) => a.localeCompare(b, "ko"));
@@ -1800,6 +1785,28 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
     return ms;
   };
 
+  // 세트 분석이 찾은 '놓친 기법 자리'를 관망(미진입) 기록으로 추가 → 같은 세트에 합류, 월간복기에서 놓친 매매로 집계
+  const addMissedAsObserve = async (m, members, row) => {
+    try {
+      const head = members[0];
+      const img = head.chartImg ?? await sbGetChartImg(head.id);
+      const t = {
+        id: Date.now(), stock: head.stock, date: head.date, buyPrice: "", sellPrice: "", amount: "", pnl: "", pnlRate: "",
+        technique: m.technique,
+        reason: `[놓친 자리 · AI 제안] ${m.time || ""}${m.price ? ` ${Number(m.price).toLocaleString()}원` : ""} — ${m.reason || ""}`.trim(),
+        memo: "세트 분석에서 추가한 관망(미진입) 기록", chartImg: img || null, chartDesc: "", aiAnalysis: "",
+        createdAt: new Date().toLocaleDateString("ko-KR"),
+      };
+      await sbUpsert("trades", [tradeToRow(t)]);
+      setTrades(p => [t, ...p]);
+      // 추가 표시(중복 추가 방지): 해당 제안에 addedId 기록
+      const missed = parseMissed(row.analysis).map(x => (x.technique === m.technique && x.time === m.time && x.price === m.price) ? { ...x, addedId: t.id } : x);
+      const next = { ...row, analysis: withLec(withMissed(stripMissed(stripLec(row.analysis)), missed), parseLec(row.analysis)) };
+      try { await sbUpsertTradeSet(next); setTradeSets(p => ({ ...(p || {}), [row.key]: next })); } catch {}
+      setFeedback(`✅ '${m.technique}' 관망 기록 추가 — 세트 재분석 시 함께 분석됩니다`);
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+  };
+
   // 매매 분석 = 그 매매가 속한 세트(같은 날·같은 종목, 기법별 기록) 전체를 한 번에 분석
   // tradeArg 없으면 상세의 selected, 있으면 배치 대상. 결과: 기록별 분석은 각 매매의 ai_analysis, 세트 흐름·순서·B/S 배정은 trade_sets
   const analyzeDetailTrade = async (tradeArg, pool) => {
@@ -1902,10 +1909,10 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
       const setRow = {
         key: setKeyOf(members), date: base.date, stock: members[0].stock, trade_ids: seqIds.join(","),
         markers: parsed.markers.map(m => ({ ...m, trade_id: idOfLabel[m.trade] ?? null })),
-        analysis: withLec(parsed.setText, parsed.lecture.SET), updated_at: new Date().toISOString(),
+        analysis: withLec(withMissed(parsed.setText, parsed.missed), parsed.lecture.SET), updated_at: new Date().toISOString(),
       };
       let setSaved = false;
-      if (members.length > 1 || parsed.markers.length) {
+      if (members.length > 1 || parsed.markers.length || parsed.missed.length) {
         try { await sbUpsertTradeSet(setRow); setSaved = true; setTradeSets(p => ({ ...(p || {}), [setRow.key]: setRow })); }
         catch { if (isDetail) setFeedback("⚠️ 세트 정보 저장 실패 — scripts/trade_sets.sql을 실행해 주세요(분석은 각 매매에 저장됨)."); }
       }
@@ -3089,9 +3096,36 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
                         {showSetMarkers ? "▲ B/S 배정 숨기기" : `▼ 차트 B/S 배정 보기 (${setRow.markers.length}개 · '(?)'는 확신 낮음)`}
                       </button>
                     )}
-                    {stripLec(setRow?.analysis) && (
+                    {stripMissed(stripLec(setRow?.analysis)) && (
                       <div style={{ ...val14, marginTop: 8, background: "#12182a", border: "1px solid #2a3a5a", whiteSpace: "normal", lineHeight: 1.7 }}>
-                        <MD text={stripLec(setRow.analysis)} />
+                        <MD text={stripMissed(stripLec(setRow.analysis))} />
+                      </div>
+                    )}
+                    {/* 🔍 놓친 기법 자리(AI 제안) — 버튼으로 관망 기록 추가 */}
+                    {parseMissed(setRow?.analysis).length > 0 && (
+                      <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: "#f0b232" }}>🔍 놓친 기법 자리 (AI 제안)</div>
+                        {parseMissed(setRow.analysis).map((m, k) => {
+                          const lec = m.lecture && techniques.find(t => t.id === Number(m.lecture));
+                          const added = m.addedId && trades.find(t => t.id === m.addedId);
+                          return (
+                            <div key={k} style={{ padding: "7px 10px", borderRadius: 6, background: "#1c1a12", border: "1px solid #4a4020", fontSize: 12.5 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                <span style={{ background: categoryColor(m.technique), fontSize: 11, padding: "1px 6px", borderRadius: 4, color: "#fff" }}>{m.technique}</span>
+                                <span style={{ color: "#bbb" }}>{m.time || ""}{m.price ? ` · ${Number(m.price).toLocaleString()}원` : ""}</span>
+                                {m.conf && <span style={{ color: "#777", fontSize: 11 }}>확신 {m.conf}</span>}
+                                <span style={{ marginLeft: "auto" }}>
+                                  {added
+                                    ? <button onClick={() => openDetail(added, { replace: true })} style={{ background: "none", border: "none", color: "#4caf50", cursor: "pointer", fontSize: 12, padding: 0 }}>✓ 관망 기록 추가됨 →</button>
+                                    : <button onClick={() => addMissedAsObserve(m, setMs, setRow)}
+                                        style={{ padding: "3px 10px", background: "#4a4020", border: "1px solid #f0b23288", color: "#f0d080", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>＋ 관망 기록으로 추가</button>}
+                                </span>
+                              </div>
+                              {m.reason && <div style={{ color: "#aaa", marginTop: 4, lineHeight: 1.6 }}>{m.reason}</div>}
+                              {lec && <button onClick={() => onOpenLecture?.(lec.id)} style={{ marginTop: 3, background: "none", border: "none", color: "#8ee0a0", cursor: "pointer", fontSize: 11.5, padding: 0 }}>📚 근거 강의: {lec.name} →</button>}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                     {setLecRec && (

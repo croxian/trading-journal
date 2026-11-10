@@ -3,7 +3,7 @@
 // - 순차 실행(고정 블록 프롬프트 캐시 적중) / 진행 파일에 완료 키 기록 → 중단 후 재실행하면 이어서 처리
 // - trade_sets 테이블이 없으면 중단(scripts/trade_sets.sql 먼저 실행)
 import fs from "node:fs";
-import { SET_SYSTEM, buildStaticText, buildSetVariableText, parseSetResult } from "../src/setAnalysis.js";
+import { SET_SYSTEM, buildStaticText, buildSetVariableText, parseSetResult, withMissed } from "../src/setAnalysis.js";
 
 const APP = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
 const SB_URL = APP.match(/const SB_URL = "([^"]+)"/)[1];
@@ -203,7 +203,7 @@ for (const [si, members] of todo.entries()) {
     await sb("trade_sets", { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify({
       key, date: base.date, stock: base.stock, trade_ids: seqIds.join(","),
       markers: parsed.markers.map(m => ({ ...m, trade_id: idOfLabel[m.trade] ?? null })),
-      analysis: withLec(parsed.setText, parsed.lecture.SET), updated_at: new Date().toISOString(),
+      analysis: withLec(withMissed(parsed.setText, parsed.missed), parsed.lecture.SET), updated_at: new Date().toISOString(),
     }) });
     for (const t of members) {
       const label = labelOf[t.id];
