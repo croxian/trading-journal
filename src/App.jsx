@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
 import JSZip from "jszip";
 import * as XLSX from "xlsx";
-import { TRADE_CATEGORIES, CHART_ANGLE_NOTE, CHART_TF_NOTE, SET_SYSTEM, buildStaticText, buildSetVariableText, parseSetResult, withMissed, parseMissed, stripMissed } from "./setAnalysis.js";
+import { TRADE_CATEGORIES, CHART_ANGLE_NOTE, CHART_TF_NOTE, SET_SYSTEM, buildStaticText, buildSetVariableText, parseSetResult, withMissed, parseMissed, stripMissed, AI_MISSED_PREFIX } from "./setAnalysis.js";
 
 // ==================== 상수 / 설정 ====================
 const TABS = ["🏠 대시보드", "📝 매매일지", "📊 통계", "📚 강의록", "🔴 실전매매", "📅 월간복기"];
@@ -1793,7 +1793,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
       const t = {
         id: Date.now(), stock: head.stock, date: head.date, buyPrice: "", sellPrice: "", amount: "", pnl: "", pnlRate: "",
         technique: m.technique,
-        reason: `[놓친 자리 · AI 제안] ${m.time || ""}${m.price ? ` ${Number(m.price).toLocaleString()}원` : ""} — ${m.reason || ""}`.trim(),
+        reason: `${AI_MISSED_PREFIX} ${m.time || ""}${m.price ? ` ${Number(m.price).toLocaleString()}원` : ""} — ${m.reason || ""}`.trim(),
         memo: "세트 분석에서 추가한 관망(미진입) 기록", chartImg: img || null, chartDesc: "", aiAnalysis: "",
         createdAt: new Date().toLocaleDateString("ko-KR"),
       };
@@ -3080,7 +3080,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
                             <span style={{ color: "#888", fontWeight: 700 }}>{i + 1}</span>
                             {t.technique && <span style={{ background: categoryColor(t.technique), fontSize: 11, padding: "1px 6px", borderRadius: 4, color: "#fff" }}>{t.technique}</span>}
                             {isObserveTrade(t)
-                              ? <span style={{ color: "#888" }}>관망</span>
+                              ? <span style={{ color: "#888" }}>관망{(t.reason || "").trim().startsWith(AI_MISSED_PREFIX) && <span title="이유를 직접 고쳐 쓰면 일반 관망 기록으로 분석됩니다" style={{ color: "#f0b232", marginLeft: 4, fontSize: 11 }}>· AI 제안</span>}</span>
                               : <span style={{ color: "#bbb" }}>{fmtNum(t.buyPrice) || "-"} → {fmtNum(t.sellPrice) || "-"}</span>}
                             {num(t.amount) > 0 && <span style={{ color: "#666", fontSize: 11 }}>{Math.round(num(t.amount) / 10000).toLocaleString()}만</span>}
                             {miss && <span style={{ color: "#f39c12", fontSize: 11 }}>⚠️ 가격·금액 입력 필요</span>}

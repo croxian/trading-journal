@@ -15,6 +15,9 @@ const MISSED_RE = /\n?<!--MISSED:([^>]*)-->/;
 export const withMissed = (text, missed) => (missed?.length ? `${text}\n<!--MISSED:${encodeURIComponent(JSON.stringify(missed))}-->` : text);
 export const parseMissed = (s) => { const m = s && s.match(MISSED_RE); if (!m) return []; try { return JSON.parse(decodeURIComponent(m[1])); } catch { return []; } };
 export const stripMissed = (s) => (s ? s.replace(MISSED_RE, "") : s);
+// '＋ 관망 기록으로 추가'로 만든 기록의 매매이유 머리말(사용자가 이유를 고쳐 쓰면 일반 관망 기록으로 취급)
+export const AI_MISSED_PREFIX = "[놓친 자리 · AI 제안]";
+const AI_MISSED_RE = /^\s*\[놓친 자리 · AI 제안\]/;
 
 export const CHART_ANGLE_NOTE = "각도(°) 주석(예: 57.42°(6.58%))의 앞 숫자는 추세선 기울기일 뿐 등락률이 아니다 — 괄호 안 %만 가격 변동폭 주석이다. 각도 값을 수익률·등락률로 읽지 말 것.";
 export const CHART_TF_NOTE = "봉 주기: 분석 전에 하단 시간 눈금 사이 캔들 수를 세어 몇 분봉인지(1분/3분/5분 등, 일봉이면 일봉) 판별하고, 차트 분석 첫 줄에 '○분봉(근거)'로 명시한 뒤 이후 타이밍은 이 봉 주기 기준으로 서술. 셀 때는 눈금 간격이 일정한 구간을 쓰고, 날짜 경계(빨간 세로선) 부근이나 15:30 전후(정규장→NXT 전환)처럼 간격이 불규칙한 구간은 피할 것. 확실하지 않으면 '추정'으로 표기.";
@@ -46,6 +49,7 @@ const ANALYSIS_GUIDE =
   `- 3단계(놓친 자리): 차트·KRX 시세·교본(강사 B/S)·강의록 기준으로, 이 종목·날짜에 강의록 기법상 진입했어야 하는데 기록(T)에 없는 자리가 있으면 찾아라. 차트의 네모(정답 매수) 표시, 교본 B 중 내 기록에 없는 구간, 강의록 트리거가 명확히 성립한 구간이 근거다. 이미 기록된 기법·구간과 겹치면 제외, 근거가 약하면 넣지 말 것(최대 3개, 없으면 빈 배열). 기법명은 [기법 목록] 중에서 고를 것.\n` +
   `- 기법 분리 원칙: 각 T 섹션은 그 T에 배정된 마커·가격·금액·매매이유만 근거로 하고, 다른 T의 손익·구간을 합치거나 혼동하지 말 것. T 사이의 연결(전환·재진입·추가매수·청산 이어짐)은 SET 섹션에서만 다룬다.\n` +
   `- 관망 기록(매수가·매도가 없음)은 실제 진입이 없으므로 체결 손익·손절 실행을 논하지 말고, 관망 판단이 옳았는지/진입했어야 하는 자리였는지/진입했다면 정답매매가 무엇이었는지 중심으로 쓸 것.\n` +
+  `- 'AI 제안으로 추가된 관망 기록'은 매매이유가 사용자의 판단이 아니라 이전 분석의 제안이다. 사용자가 그 자리를 보고도 안 들어갔다고 단정하거나 그 문장을 사용자 근거로 인용하지 말고, 그 자리를 다음에 잡기 위한 체크포인트(트리거·확인 신호·진입 조건·손절 기준)와 정답 시나리오 중심으로 쓸 것. 사용자가 이유를 직접 고쳐 쓴 경우(표시 없음)는 일반 관망 기록으로 다룬다.\n` +
   `- 각 T의 [우선 참고 강의록 ID]를 먼저 보되, 강의록 DB 전체에서 더 맞는 내용이 있으면 함께 인용할 것. 우선 참고가 없으면 '직접 매칭 강의록 없음'을 명시할 것.\n\n` +
   `[출력 형식] 구분자 줄(<<<…>>>)은 정확히 그대로, 다른 텍스트 없이 한 줄로 쓸 것:\n` +
   `<<<SET>>>\n` +
@@ -110,7 +114,7 @@ export const buildSetVariableText = ({ stock, date, dayLabel, items, charts, liv
     items.map(({ label, trade: t, observe, relatedIds }) =>
       `[${label}] id:${t.id} 기법:${t.technique || "미지정"}${observe ? " (관망·미진입)" : ""} 평균매수가:${fmt(t.buyPrice)} 평균매도가:${fmt(t.sellPrice)} 매입금액:${fmt(t.amount)} 실현손익:${fmt(t.pnl)} 수익률:${fmt(t.pnlRate)}%\n` +
       `  우선 참고 강의록 ID: ${relatedIds.length ? relatedIds.join(", ") : "(직접 매칭 없음)"}\n` +
-      `  매매이유: ${t.reason || "(없음)"}\n` +
+      `  매매이유${AI_MISSED_RE.test(t.reason || "") ? "(⚠️ AI 제안으로 추가된 관망 기록 — 사용자 작성 아님)" : ""}: ${t.reason || "(없음)"}\n` +
       (t.memo ? `  메모: ${t.memo}\n` : "")
     ).join("\n") + "\n\n" +
     (rules.length ? `[기법별 추가 규칙]\n${rules.join("\n")}\n\n` : "") +
