@@ -970,7 +970,11 @@ function LectureTab({ pendingLecture, onConsumed }) {
   useEffect(() => {
     if (pendingLecture == null || !techniques.length) return;
     const t = techniques.find(x => x.id === pendingLecture || String(x.id) === String(pendingLecture));
-    if (t) { setSelected(t); setView("detail"); setFeedback(""); }
+    if (t) {
+      setSelected(t); setView("detail"); setFeedback("");
+      // 다른 탭에서 열린 강의 상세를 현재 히스토리 항목에 기록 → 앞으로가기/탭 재진입 시 같은 강의로 복원
+      window.history.replaceState({ ...(window.history.state || {}), techView: "detail", techId: t.id }, "");
+    }
     onConsumed?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingLecture, techniques]);
@@ -987,8 +991,21 @@ function LectureTab({ pendingLecture, onConsumed }) {
   };
 
   // 브라우저 뒤로가기: 상세 → 목록
+  // 다른 탭에 갔다가 뒤로 돌아와 새로 마운트되면 현재 히스토리의 상세/수정 상태를 복원(목록으로 덮어쓰지 않음)
+  const restoreHistRef = useRef(null);
   useEffect(() => {
-    window.history.replaceState({ ...(window.history.state || {}), techView: "list" }, "");
+    if (loading || !restoreHistRef.current || !techniques.length) return;
+    const s = restoreHistRef.current; restoreHistRef.current = null;
+    const t = techniques.find(x => x.id === s.techId);
+    if (t) {
+      setSelected(t); setView("detail"); setFeedback("");
+      if (s.techView === "edit") { setEditJson(JSON.stringify(t, null, 2)); setEditRaw(t.rawInput || ""); setEditSubMode("raw"); setEditMode(true); }
+    }
+  }, [loading, techniques]);
+  useEffect(() => {
+    const s0 = window.history.state || {};
+    if (["detail", "edit"].includes(s0.techView) && s0.techId) restoreHistRef.current = s0;
+    else window.history.replaceState({ ...s0, techView: "list" }, "");
     const handlePop = (e) => {
       const s = e.state || {};
       if ((s.techView === "detail" || s.techView === "edit") && s.techId) {
@@ -1420,10 +1437,9 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
   }, [pendingTradeId, loading, trades]);
 
   // 브라우저 뒤로가기/앞으로가기 처리
-  useEffect(() => {
-    window.history.replaceState({ ...(window.history.state || {}), journalView: "list" }, "");
-    const handlePop = (e) => {
-      const s = e.state || {};
+  // 다른 탭(추천 강의 등)에 갔다가 뒤로 돌아오면 이 탭이 새로 마운트됨 → 현재 히스토리의 상세/수정/리포트 상태를 복원(목록으로 덮어쓰지 않음)
+  function applyJournalHist(s) {
+    {
       // 흐름분석 리포트 오버레이: 뒤로가기로 닫고, 앞으로가기(또는 리포트 링크→매매 상세에서 뒤로)로 다시 열림
       const fr = s.journalView === "flow" ? flowReviewsRef.current.find(r => String(r.id) === String(s.flowId)) : null;
       setFlowReport(fr ? { content: stripLec(fr.content), recLectureId: parseLec(fr.content) } : null);
@@ -1444,11 +1460,26 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
         if (selectedRef.current) scrollTargetRef.current = `trade-row-${selectedRef.current.id}`;
         setView("list"); setSelected(null); setEditTrade(false); setFeedback(""); setDetailAiAnalysis(""); setSimilarTrades([]);
       }
-    };
+    }
+  }
+
+  const restoreHistRef = useRef(null);
+  useEffect(() => {
+    const s0 = window.history.state || {};
+    if ((["detail", "edit"].includes(s0.journalView) && s0.journalId) || (s0.journalView === "flow" && s0.flowId != null)) restoreHistRef.current = s0;
+    else window.history.replaceState({ ...s0, journalView: "list" }, "");
+    const handlePop = (e) => applyJournalHist(e.state || {});
     window.addEventListener("popstate", handlePop);
     return () => window.removeEventListener("popstate", handlePop);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
+  useEffect(() => {
+    if (loading || !restoreHistRef.current || !trades.length) return;
+    tradesRef.current = trades;   // 아래 tradesRef 동기화 effect보다 먼저 실행되므로 직접 맞춤
+    const s = restoreHistRef.current; restoreHistRef.current = null;
+    applyJournalHist(s);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, trades]);
   useEffect(() => { tradesRef.current = trades; }, [trades]);
 
   // add/edit 폼에서 저장·이동으로 나갈 때 현재 히스토리 항목을 목록/상세로 교체(add/edit 마커가 남아 뒤로가기 꼬이는 것 방지)
@@ -3473,8 +3504,19 @@ function RealTradeTab({ techniques = [], onOpenLecture, onBg }) {
   useEffect(() => { load(); }, [load]);
 
   // 브라우저 뒤로가기: 상세 → 목록
+  // 다른 탭(추천 강의 등)에서 뒤로 돌아와 새로 마운트되면 현재 히스토리의 상세/수정 상태를 복원(목록으로 덮어쓰지 않음)
+  const restoreHistRef = useRef(null);
   useEffect(() => {
-    window.history.replaceState({ ...(window.history.state || {}), liveView: "list" }, "");
+    if (loading || !restoreHistRef.current || !lTrades.length) return;
+    const s = restoreHistRef.current; restoreHistRef.current = null;
+    const t = lTrades.find(x => x.id === s.liveId);
+    if (t) { openDetail(t); if (s.liveView === "edit") { setEditForm({ ...t }); setEditTrade(true); } }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, lTrades]);
+  useEffect(() => {
+    const s0 = window.history.state || {};
+    if (["detail", "edit"].includes(s0.liveView) && s0.liveId) restoreHistRef.current = s0;
+    else window.history.replaceState({ ...s0, liveView: "list" }, "");
     const handlePop = (e) => {
       const s = e.state || {};
       if ((s.liveView === "detail" || s.liveView === "edit") && s.liveId) {
