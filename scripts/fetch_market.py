@@ -7,9 +7,23 @@ import json, datetime as dt, sys, os, re, urllib.request
 import FinanceDataReader as fdr
 
 SB_URL = "https://vbdtrynddjryxcpgpisf.supabase.co"
-SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZiZHRyeW5kZGpyeXhjcGdwaXNmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0MDI0MDEsImV4cCI6MjA5NTk3ODQwMX0.p3Bs8i-sNz6GodYIXLg1BzdrTxAc9-jB2dZRaOKCW3M"
-HDR = {"apikey": SB_KEY, "Authorization": f"Bearer {SB_KEY}", "Content-Type": "application/json"}
 BASE = os.path.dirname(os.path.abspath(__file__))
+# 서버 전용 키(service_role): DB가 RLS로 '로그인 사용자만' 잠겨 있어 무인 수집은 이 키로 접근.
+# GitHub Actions에서는 저장소 Secret SUPABASE_SERVICE_KEY, 로컬에서는 프로젝트 루트 .env의 SUPABASE_SERVICE_KEY.
+# 절대 코드·앱(VITE_)에 넣지 말 것.
+def _service_key():
+    k = os.environ.get("SUPABASE_SERVICE_KEY", "").strip()
+    if not k:
+        env = os.path.join(BASE, "..", ".env")
+        if os.path.exists(env):
+            for line in open(env, encoding="utf-8"):
+                m = re.match(r"\s*SUPABASE_SERVICE_KEY\s*=\s*[\"']?([^\"'\r\n]+)", line)
+                if m: k = m.group(1).strip()
+    if not k:
+        sys.exit("SUPABASE_SERVICE_KEY가 없습니다 (GitHub Secret 또는 로컬 .env에 설정)")
+    return k
+SB_KEY = _service_key()
+HDR = {"apikey": SB_KEY, "Authorization": f"Bearer {SB_KEY}", "Content-Type": "application/json"}
 
 def sb_get(path):
     req = urllib.request.Request(f"{SB_URL}/rest/v1/{path}", headers=HDR)

@@ -16,4 +16,4 @@ alter table trade_sets enable row level security;
 
 drop policy if exists trade_sets_all on trade_sets;
 create policy trade_sets_all on trade_sets
-  for all to anon using (true) with check (true);
+  for all to authenticated using (true) with check (true);   -- 로그인 사용자만(secure_rls.sql과 동일)

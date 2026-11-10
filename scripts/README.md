@@ -11,7 +11,7 @@
     stock TEXT NOT NULL, date TEXT NOT NULL, code TEXT, data JSONB,
     created_at TIMESTAMPTZ DEFAULT NOW(), PRIMARY KEY (stock, date)
   );
-  ALTER TABLE market_data DISABLE ROW LEVEL SECURITY;
+  -- RLS는 scripts/secure_rls.sql로 로그인 사용자만 허용(수집 스크립트는 service_role 키 사용)
   ```
 
 ## 실행

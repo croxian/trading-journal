@@ -10,7 +10,7 @@ create table if not exists monthly_reviews (
 
 alter table monthly_reviews enable row level security;
 
--- 앱은 anon 키로 읽기/쓰기하므로 anon 전체 허용 정책 추가(다른 테이블과 동일한 접근 모델)
+-- 앱은 로그인 세션으로 읽기/쓰기 → 로그인 사용자(authenticated)만 허용(secure_rls.sql과 동일한 접근 모델)
 drop policy if exists monthly_reviews_all on monthly_reviews;
 create policy monthly_reviews_all on monthly_reviews
-  for all to anon using (true) with check (true);
+  for all to authenticated using (true) with check (true);   -- 로그인 사용자만(secure_rls.sql과 동일)

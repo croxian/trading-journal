@@ -1,13 +1,18 @@
 import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
 import JSZip from "jszip";
 import * as XLSX from "xlsx";
+import { createClient } from "@supabase/supabase-js";
 import { TRADE_CATEGORIES, CHART_ANGLE_NOTE, CHART_TF_NOTE, SET_SYSTEM, buildStaticText, buildSetVariableText, parseSetResult, withMissed, parseMissed, stripMissed, AI_MISSED_PREFIX } from "./setAnalysis.js";
 
 // ==================== 상수 / 설정 ====================
 const TABS = ["🏠 대시보드", "📝 매매일지", "📊 통계", "📚 강의록", "🔴 실전매매", "📅 월간복기"];
 const SB_URL = "https://vbdtrynddjryxcpgpisf.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZiZHRyeW5kZGpyeXhjcGdwaXNmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0MDI0MDEsImV4cCI6MjA5NTk3ODQwMX0.p3Bs8i-sNz6GodYIXLg1BzdrTxAc9-jB2dZRaOKCW3M";
+// SB_KEY(anon)는 원래 공개용 키 — 데이터는 RLS로 '로그인한 사용자만' 접근 가능(scripts/secure_rls.sql).
+// 모든 DB 요청의 공통 헤더. 로그인하면 Authorization을 사용자 세션 토큰으로 교체(setAuthToken)
 const HDR = { "Content-Type": "application/json", "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Prefer": "resolution=merge-duplicates" };
+const supa = createClient(SB_URL, SB_KEY, { auth: { persistSession: true, autoRefreshToken: true } });
+const setAuthToken = (token) => { HDR.Authorization = `Bearer ${token || SB_KEY}`; };
 
 // ==================== Supabase 유틸 ====================
 const sbGet = async (table) => {
@@ -441,31 +446,15 @@ const highlightText = (text, terms) => {
   );
 };
 
-// Claude 호출은 서버 중계(/api/claude)로만 — API 키는 Vercel 서버 환경변수에만 있고 브라우저 JS에는 없음.
-// 앱에 로그인이 없어 접근 암호로 보호: 처음 한 번 입력하면 이 브라우저에 저장, 틀리면 다시 물음
-const APP_PASS_KEY = "tj_app_pass";
-const getAppPass = (force = false) => {
-  let p = null;
-  try { p = force ? null : localStorage.getItem(APP_PASS_KEY); } catch {}
-  if (!p) {
-    p = window.prompt(force ? "접근 암호가 틀렸습니다. 다시 입력하세요." : "AI 분석·시세 수집 접근 암호를 입력하세요 (이 브라우저에 저장됩니다)");
-    if (!p) return null;
-    try { localStorage.setItem(APP_PASS_KEY, p); } catch {}
-  }
-  return p;
-};
-// 서버 함수 호출(암호 헤더 포함, 401이면 암호 다시 받아 1회 재시도)
+// Claude 호출·시세 수집은 서버 함수(/api/*)로만 — API 키는 Vercel 서버 환경변수에만 있고 브라우저 JS에는 없음.
+// 서버는 로그인 세션 토큰을 Supabase에 확인한 뒤에만 처리(api/_auth.js)
 const callApi = async (path, init = {}) => {
-  let pass = getAppPass();
-  if (!pass) throw new Error("접근 암호가 필요합니다");
-  for (let i = 0; i < 2; i++) {
-    const res = await fetch(path, { ...init, headers: { ...(init.headers || {}), "x-app-pass": pass } });
-    if (res.status !== 401) return res;
-    try { localStorage.removeItem(APP_PASS_KEY); } catch {}
-    pass = getAppPass(true);
-    if (!pass) break;
-  }
-  const e = new Error("접근 암호가 틀렸습니다"); e.status = 401; throw e;
+  const { data } = await supa.auth.getSession();   // 만료 임박 시 자동 갱신된 토큰
+  const token = data.session?.access_token;
+  if (!token) { const e = new Error("로그인이 필요합니다"); e.status = 401; throw e; }
+  const res = await fetch(path, { ...init, headers: { ...(init.headers || {}), Authorization: `Bearer ${token}` } });
+  if (res.status === 401) { const e = new Error("로그인 세션이 만료됐습니다 — 새로고침 후 다시 로그인해 주세요"); e.status = 401; throw e; }
+  return res;
 };
 // AI 분석 공통 모델. 2026-09 벤치(8건, 교차 심사)에서 opus-5-5@high가 fable-5 대비 품질↑·비용↓, medium 대비 맞대결 23:9 우세
 const AI_MODEL = "claude-opus-5-5";
@@ -4665,7 +4654,7 @@ function MonthlyReviewTab({ techniques = [], onOpenTrade, onOpenLecture, onBg })
   );
 }
 
-export default function App() {
+function MainApp({ onLogout }) {
   const [activeTab, setActiveTab] = useState(0);
   const [techniques, setTechniques] = useState([]);
   const [pendingLecture, setPendingLecture] = useState(null);
@@ -4722,6 +4711,7 @@ export default function App() {
         {isMobile && (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderBottom: "1px solid #2a2d3a" }}>
             <span style={{ fontSize: 14, fontWeight: 700, color: "#fff" }}>📈 매매 시스템</span>
+            <button onClick={onLogout} style={{ background: "none", border: "1px solid #3a3d4a", color: "#888", borderRadius: 5, cursor: "pointer", fontSize: 11, padding: "3px 8px" }}>로그아웃</button>
           </div>
         )}
         {/* 탭 바 */}
@@ -4734,6 +4724,7 @@ export default function App() {
                 color: activeTab === i ? "#fff" : "#666", cursor: "pointer",
                 fontSize: isMobile ? 12 : 14, fontWeight: activeTab === i ? 600 : 400, whiteSpace: "nowrap", flexShrink: 0 }}>{t}</button>
           ))}
+          {!isMobile && <button onClick={onLogout} style={{ marginLeft: "auto", background: "none", border: "1px solid #3a3d4a", color: "#888", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: "4px 10px", flexShrink: 0 }}>로그아웃</button>}
         </div>
       </div>
       <div style={{ padding: isMobile ? 12 : 20, maxWidth: 960, margin: "0 auto" }}>
@@ -4764,4 +4755,50 @@ export default function App() {
       )}
     </div>
   );
+}
+
+// ==================== 로그인 ====================
+// 앱 전체를 Supabase 로그인으로 잠금. 데이터는 RLS로 로그인 사용자만, AI·시세 수집 서버 함수도 세션 확인
+// (회원가입은 Supabase 대시보드에서 막고 계정은 대시보드에서만 생성)
+function LoginScreen() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true); setErr("");
+    const { error } = await supa.auth.signInWithPassword({ email: email.trim(), password });
+    if (error) setErr(error.message === "Invalid login credentials" ? "이메일 또는 비밀번호가 틀렸습니다" : error.message);
+    setBusy(false);
+  };
+  const inp = { width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "10px 12px", fontSize: 14, boxSizing: "border-box" };
+  return (
+    <div style={{ fontFamily: "sans-serif", background: "#0f1117", minHeight: "100vh", color: "#e0e0e0", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, boxSizing: "border-box" }}>
+      <form onSubmit={submit} style={{ width: "100%", maxWidth: 340, background: "#1a1d27", border: "1px solid #2a2d3a", borderRadius: 12, padding: 24, display: "grid", gap: 12 }}>
+        <div style={{ fontSize: 17, fontWeight: 700, color: "#fff" }}>📈 매매 시스템</div>
+        <div style={{ fontSize: 12, color: "#777" }}>로그인한 기기에서는 계속 유지됩니다.</div>
+        <input id="login-email" type="email" autoComplete="username" value={email} onChange={e => setEmail(e.target.value)} placeholder="이메일" style={inp} required />
+        <input id="login-password" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} placeholder="비밀번호" style={inp} required />
+        {err && <div style={{ fontSize: 13, color: "#e74c3c" }}>{err}</div>}
+        <button type="submit" disabled={busy}
+          style={{ padding: "10px 0", background: busy ? "#2a2d3a" : "#4f8ef7", color: "#fff", border: "none", borderRadius: 6, cursor: busy ? "default" : "pointer", fontSize: 14, fontWeight: 600 }}>
+          {busy ? "로그인 중…" : "로그인"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+export default function App() {
+  const [session, setSession] = useState(undefined);   // undefined = 확인 중
+  useEffect(() => {
+    supa.auth.getSession().then(({ data }) => { setAuthToken(data.session?.access_token); setSession(data.session); });
+    // 로그인·로그아웃·토큰 자동 갱신 시 DB 요청 헤더도 교체
+    const { data: sub } = supa.auth.onAuthStateChange((_e, s) => { setAuthToken(s?.access_token); setSession(s); });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+  if (session === undefined) return <div style={{ background: "#0f1117", minHeight: "100vh" }} />;
+  if (!session) return <LoginScreen />;
+  return <MainApp onLogout={() => supa.auth.signOut()} />;
 }

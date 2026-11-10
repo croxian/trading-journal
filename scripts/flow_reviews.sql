@@ -17,4 +17,4 @@ alter table flow_reviews enable row level security;
 
 drop policy if exists flow_reviews_all on flow_reviews;
 create policy flow_reviews_all on flow_reviews
-  for all to anon using (true) with check (true);
+  for all to authenticated using (true) with check (true);   -- 로그인 사용자만(secure_rls.sql과 동일)

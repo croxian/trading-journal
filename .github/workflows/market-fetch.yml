@@ -30,4 +30,6 @@ jobs:
         run: pip install finance-datareader
 
       - name: 시세 수집 (신규만 → Supabase 업로드)
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}   # 저장소 Settings → Secrets → Actions
         run: python scripts/fetch_market.py upload
