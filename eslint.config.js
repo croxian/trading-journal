@@ -18,4 +18,9 @@ export default defineConfig([
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
   },
+  // 서버 함수(Vercel)·빌드 설정·스크립트는 Node 환경
+  {
+    files: ['api/**/*.js', 'vite.config.js', 'scripts/**/*.mjs'],
+    languageOptions: { globals: globals.node },
+  },
 ])

@@ -9,7 +9,7 @@ const APP = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
 const SB_URL = APP.match(/const SB_URL = "([^"]+)"/)[1];
 const SB_KEY = APP.match(/const SB_KEY = "([^"]+)"/)[1];
 const ENV = fs.readFileSync(new URL("../.env", import.meta.url), "utf8");
-const API_KEY = ENV.match(/^\s*VITE_ANTHROPIC_KEY\s*=\s*["']?([^"'\r\n]+)/m)[1].trim();
+const API_KEY = (ENV.match(/^\s*ANTHROPIC_API_KEY\s*=\s*["']?([^"'\r\n]+)/m) || ENV.match(/^\s*VITE_ANTHROPIC_KEY\s*=\s*["']?([^"'\r\n]+)/m))[1].trim();
 const MODEL = APP.match(/const AI_MODEL = "([^"]+)"/)[1];
 const EFFORT = APP.match(/const AI_EFFORT = "([^"]+)"/)[1];
 const FALLBACK = "claude-fable-5-1";

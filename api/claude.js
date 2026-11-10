@@ -1,0 +1,23 @@
+// Claude API 중계(Vercel 서버 함수) — API 키를 브라우저 JS에 넣지 않기 위해 서버에서만 보관
+// 환경변수(Vercel → Settings → Environment Variables): ANTHROPIC_API_KEY, APP_PASSWORD
+// 앱에 로그인이 없으므로 접근 암호(x-app-pass)로 아무나 호출하지 못하게 막는다.
+export const config = { maxDuration: 300 };   // 세트 분석은 길면 4~5분
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") return res.status(405).json({ error: { message: "POST만 허용" } });
+  if (!process.env.APP_PASSWORD || req.headers["x-app-pass"] !== process.env.APP_PASSWORD)
+    return res.status(401).json({ error: { message: "접근 암호가 틀렸습니다" } });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: { message: "서버에 ANTHROPIC_API_KEY가 설정되지 않았습니다" } });
+  try {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json", "anthropic-version": "2023-06-01", "x-api-key": process.env.ANTHROPIC_API_KEY },
+      body: JSON.stringify(req.body),
+    });
+    res.status(r.status);
+    res.setHeader("content-type", r.headers.get("content-type") || "application/json");
+    res.send(await r.text());
+  } catch (e) {
+    res.status(502).json({ error: { message: `Claude 중계 실패: ${e.message}` } });
+  }
+}

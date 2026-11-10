@@ -441,7 +441,32 @@ const highlightText = (text, terms) => {
   );
 };
 
-const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_KEY || "";
+// Claude 호출은 서버 중계(/api/claude)로만 — API 키는 Vercel 서버 환경변수에만 있고 브라우저 JS에는 없음.
+// 앱에 로그인이 없어 접근 암호로 보호: 처음 한 번 입력하면 이 브라우저에 저장, 틀리면 다시 물음
+const APP_PASS_KEY = "tj_app_pass";
+const getAppPass = (force = false) => {
+  let p = null;
+  try { p = force ? null : localStorage.getItem(APP_PASS_KEY); } catch {}
+  if (!p) {
+    p = window.prompt(force ? "접근 암호가 틀렸습니다. 다시 입력하세요." : "AI 분석·시세 수집 접근 암호를 입력하세요 (이 브라우저에 저장됩니다)");
+    if (!p) return null;
+    try { localStorage.setItem(APP_PASS_KEY, p); } catch {}
+  }
+  return p;
+};
+// 서버 함수 호출(암호 헤더 포함, 401이면 암호 다시 받아 1회 재시도)
+const callApi = async (path, init = {}) => {
+  let pass = getAppPass();
+  if (!pass) throw new Error("접근 암호가 필요합니다");
+  for (let i = 0; i < 2; i++) {
+    const res = await fetch(path, { ...init, headers: { ...(init.headers || {}), "x-app-pass": pass } });
+    if (res.status !== 401) return res;
+    try { localStorage.removeItem(APP_PASS_KEY); } catch {}
+    pass = getAppPass(true);
+    if (!pass) break;
+  }
+  const e = new Error("접근 암호가 틀렸습니다"); e.status = 401; throw e;
+};
 // AI 분석 공통 모델. 2026-09 벤치(8건, 교차 심사)에서 opus-5-5@high가 fable-5 대비 품질↑·비용↓, medium 대비 맞대결 23:9 우세
 const AI_MODEL = "claude-opus-5-5";
 const AI_EFFORT = "high";
@@ -449,8 +474,7 @@ const AI_EFFORT = "high";
 const FALLBACK_MODEL = { "claude-opus-5-5": "claude-fable-5-1", "claude-fable-5-1": "claude-opus-5-5", "claude-fable-5": "claude-opus-5-5" };
 // 차트 판독 공통 규칙(CHART_ANGLE_NOTE·CHART_TF_NOTE)은 setAnalysis.js에서 import (세트 분석 프롬프트와 공용)
 const claude = async (system, userContent, maxTokens = 1000, temperature, model = "claude-sonnet-4-6", effort) => {
-  const headers = { "Content-Type": "application/json", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" };
-  if (ANTHROPIC_KEY) headers["x-api-key"] = ANTHROPIC_KEY;
+  const headers = { "Content-Type": "application/json" };
   const RETRYABLE = new Set([500, 529]);
   // 1회 요청(500/529는 백오프 재시도). 성공 시 {text, stop} 반환, 그 외 HTTP 오류는 status 붙여 throw
   const post = async (mdl, sys, content, eff) => {
@@ -459,8 +483,9 @@ const claude = async (system, userContent, maxTokens = 1000, temperature, model 
     for (let attempt = 0; attempt < 3; attempt++) {
       let res;
       try {
-        res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body });
-      } catch (e) { throw new Error(`네트워크 오류 (CORS/연결): ${e.message}`); }
+        res = await callApi("/api/claude", { method: "POST", headers, body });
+      } catch (e) { if (e.status === 401) throw e; throw new Error(`네트워크 오류 (연결): ${e.message}`); }
+      if (res.status === 504) { const err = new Error("서버 처리 시간(5분) 초과 — 다시 시도해 주세요"); err.status = 504; throw err; }
       if (res.ok) {
         const data = await res.json();
         // 캐시 적중 확인용(cache_read_input_tokens가 0이면 고정 블록이 매번 바뀌는 것)
@@ -2146,6 +2171,15 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
   };
 
   // 선택 매매 각각을 단건 분석과 동일하게 순차 분석·저장 (배치)
+  // 시세 지금 수집: 서버(/api/collect)가 GitHub Actions 수집 워크플로를 즉시 실행 (로컬 fetch_now.bat 대체)
+  const triggerCollect = async () => {
+    try {
+      const r = await callApi("/api/collect", { method: "POST" });
+      const d = await r.json().catch(() => ({}));
+      setFeedback(r.ok ? "✅ 시세 수집 시작 — 1~3분 뒤 반영됩니다(이후 분석하면 그날 KRX 시세 포함)" : `❌ 시세 수집 실행 실패: ${d.error?.message || r.status}`);
+    } catch (e) { setFeedback(`❌ ${e.message}`); }
+  };
+
   // 대기열 추가 후 선택 해제(다음 묶음을 바로 고를 수 있게) + 대기 순서 안내
   const enqueueNotice = (ahead) => {
     setSelectedIds(new Set());
@@ -2462,7 +2496,9 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
             </>
           );
         })()}
-        <button onClick={load} style={{ marginLeft: "auto", padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>🔄</button>
+        <button onClick={triggerCollect} title="KRX 시세 지금 수집(GitHub Actions 즉시 실행) — 매일 20시대 자동 수집도 됨"
+          style={{ marginLeft: "auto", padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>📈 시세 수집</button>
+        <button onClick={load} style={{ padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>🔄</button>
       </div>
 
       {/* 분석 대기열 + 완료 알림 + 목록 피드백 (목록 화면 공통) */}
