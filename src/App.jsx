@@ -153,6 +153,10 @@ const sbUpsertTradeSet = async (row) => {
   });
   if (!r.ok) throw new Error(await r.text());
 };
+const sbDeleteTradeSet = async (key) => {
+  const r = await fetch(`${SB_URL}/rest/v1/trade_sets?key=eq.${encodeURIComponent(key)}`, { method: "DELETE", headers: HDR });
+  if (!r.ok) throw new Error(await r.text());
+};
 const sbDeleteOldFlowReviews = async (before) => {
   const r = await fetch(`${SB_URL}/rest/v1/flow_reviews?deleted_at=lt.${before}`, { method: "DELETE", headers: HDR });
   if (!r.ok) throw new Error(await r.text());
@@ -1269,6 +1273,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
   const [flowSearch, setFlowSearch] = useState("");
   const [tradeSets, setTradeSets] = useState(null);     // {key: row} — null이면 trade_sets 테이블 미생성
   const [showSetMarkers, setShowSetMarkers] = useState(false);
+  const [moveWholeSet, setMoveWholeSet] = useState(true);   // 수정에서 날짜 변경 시 같은 날 세트 전체를 함께 옮길지
   const flowReviewsRef = useRef([]);
   const [trashSelectMode, setTrashSelectMode] = useState(false);
   const [trashSelectedIds, setTrashSelectedIds] = useState(new Set());
@@ -1753,7 +1758,8 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
   };
 
   // 세트(같은 날·같은 종목) 구성: 체결 순서가 저장돼 있으면 그 순서, 없으면 id순
-  const setKeyOf = (ts) => `${ts[0].date}|${ts[0].stock}`;
+  // 세트 키 = 가장 먼저 만든 기록(id 최소)의 날짜|종목 — 체결 순서 정렬과 무관하게 고정(일괄분석 스크립트와 동일 규칙)
+  const setKeyOf = (ts) => { const f = ts.reduce((a, b) => (a.id < b.id ? a : b)); return `${f.date}|${f.stock}`; };
   const setMembersOf = (trade, pool = trades) => {
     const ms = pool.filter(t => !t.deletedAt && t.date === trade.date && matchStock(t.stock, trade.stock)).sort((a, b) => a.id - b.id);
     const row = ms.length && tradeSets?.[setKeyOf(ms)];
@@ -1986,9 +1992,48 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
   const handleEditSave = async () => {
     if (!editForm.stock) { setFeedback("❌ 종목명은 필수."); return; }
     try {
+      const orig = trades.find(t => t.id === editForm.id);
+      const oldMembers = orig ? setMembersOf(orig) : [];
+      const dateChanged = !!orig && editForm.date !== orig.date;
+      const stockChanged = !!orig && !matchStock(editForm.stock, orig.stock);
+      // 날짜를 잘못 넣었으면 보통 그날 기록이 한꺼번에 틀림 → 세트 전체를 함께 옮기기(기본)
+      const moveAll = dateChanged && !stockChanged && moveWholeSet && oldMembers.length > 1;
+      const others = moveAll ? oldMembers.filter(t => t.id !== editForm.id) : [];
       await sbUpsert("trades", [tradeToRow(editForm)]);
-      setTrades(p => p.map(t => t.id === editForm.id ? editForm : t));
-      setSelected(editForm); histRest("detail", editForm.id); setEditTrade(false); setFeedback("✅ 수정됨");
+      for (const t of others) await sbPatch(t.id, { date: editForm.date });
+      const movedIds = new Set([editForm.id, ...others.map(t => t.id)]);
+      setTrades(p => p.map(t => t.id === editForm.id ? editForm : movedIds.has(t.id) ? { ...t, date: editForm.date } : t));
+
+      // 저장된 세트 정보(체결 순서·B/S 배정·세트 흐름)도 따라가게: 날짜|종목 키라 그대로 두면 옛 날짜에 남음
+      const oldKey = oldMembers.length ? setKeyOf(oldMembers) : null;
+      const row = oldKey && tradeSets?.[oldKey];
+      if (row && (dateChanged || stockChanged)) {
+        const stripStale = (s) => (s || "").replace(/^> ⚠️ [^\n]*\n\n/, "");
+        const stale = (why) => `> ⚠️ ${why} 전에 분석된 내용입니다 — 📦 세트 재분석을 권장합니다.\n\n`;
+        try {
+          if (moveAll) {
+            const newMembers = oldMembers.map(t => t.id === editForm.id ? editForm : { ...t, date: editForm.date });
+            const newKey = setKeyOf(newMembers);
+            const why = `날짜 변경(${orig.date} → ${editForm.date}, KRX 시세 기준일이 바뀜)`;
+            const existing = tradeSets?.[newKey];   // 옮겨간 날짜에 이미 같은 종목 세트가 있으면 덮지 않고 재분석 필요 표시만
+            const moved = existing
+              ? { ...existing, analysis: stale(`${orig.date} 기록 합류`) + stripStale(existing.analysis), updated_at: new Date().toISOString() }
+              : { ...row, key: newKey, date: editForm.date, analysis: row.analysis ? stale(why) + stripStale(row.analysis) : row.analysis, updated_at: new Date().toISOString() };
+            await sbUpsert("trade_sets", [moved]);
+            if (newKey !== oldKey) await sbDeleteTradeSet(oldKey);
+            setTradeSets(p => { const n = { ...(p || {}) }; delete n[oldKey]; n[newKey] = moved; return n; });
+          } else {
+            // 이 기록만 빠짐 → 남은 세트에서 제거하고 재분석 필요 표시
+            const left = { ...row, trade_ids: (row.trade_ids || "").split(",").filter(id => Number(id) !== editForm.id).join(","),
+              markers: (row.markers || []).filter(m => m.trade_id !== editForm.id),
+              analysis: row.analysis ? stale(`${orig.stock} ${orig.technique || ""} 기록이 세트에서 빠지기`) + stripStale(row.analysis) : row.analysis, updated_at: new Date().toISOString() };
+            await sbUpsert("trade_sets", [left]);
+            setTradeSets(p => ({ ...(p || {}), [oldKey]: left }));
+          }
+        } catch { /* trade_sets 미생성 등 — 매매 수정 자체는 완료 */ }
+      }
+      setSelected(editForm); histRest("detail", editForm.id); setEditTrade(false);
+      setFeedback(moveAll ? `✅ 수정됨 — 같은 날 세트 ${oldMembers.length}건 모두 ${editForm.date}로 이동` : "✅ 수정됨");
     } catch (e) { setFeedback(`❌ ${e.message}`); }
   };
 
@@ -3213,6 +3258,17 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
                   <div style={label11}>날짜</div>
                   <input type="date" value={editForm.date || ""} onChange={e => setEditForm(p => ({ ...p, date: e.target.value }))}
                     style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box", colorScheme: "dark" }} />
+                  {(() => {
+                    const orig = trades.find(t => t.id === editForm.id);
+                    const n = orig ? setMembersOf(orig).length : 0;
+                    if (!orig || n < 2 || !editForm.date || editForm.date === orig.date) return null;
+                    return (
+                      <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 12, color: "#8ab4f8", cursor: "pointer" }}>
+                        <input type="checkbox" checked={moveWholeSet} onChange={e => setMoveWholeSet(e.target.checked)} style={{ accentColor: "#4f8ef7" }} />
+                        같은 날 세트 {n}건 모두 이 날짜로 변경 (체크 해제 시 이 기록만)
+                      </label>
+                    );
+                  })()}
                 </div>
                 {[["buyPrice","매수가","numcomma"],["sellPrice","매도가","numcomma"],["amount","매입금액","numcomma"],["pnl","실현손익","numcomma"],["pnlRate","수익률 (%)","number"]].map(([f,p,t]) => {
                   const comma = t === "numcomma";
