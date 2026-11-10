@@ -3057,11 +3057,17 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
                 return (
                   <div style={{ marginBottom: 14, border: "1px solid #2a3a5a", borderRadius: 8, background: "#141a24", padding: "10px 12px" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, fontSize: 12.5, flexWrap: "wrap" }}>
-                      <span style={{ fontWeight: 700, color: "#8ab4f8" }}>📦 같은 날 세트 {setMs.length}건</span>
-                      <span style={{ color: "#666", fontSize: 11 }}>{setRow?.trade_ids ? "체결 순서(차트 B/S 기준)" : "기록 순서 · 세트 분석 후 체결 순서로 정렬"}</span>
-                      <span style={{ marginLeft: "auto", fontWeight: 700, color: pnlColor(totPnl) }}>
-                        합계 {totPnl > 0 ? "+" : ""}{Math.round(totPnl).toLocaleString()}원{totAmt ? ` (${totPnl > 0 ? "+" : ""}${(totPnl / totAmt * 100).toFixed(2)}%)` : ""}
-                      </span>
+                      {setMs.length > 1 ? (
+                        <>
+                          <span style={{ fontWeight: 700, color: "#8ab4f8" }}>📦 같은 날 세트 {setMs.length}건</span>
+                          <span style={{ color: "#666", fontSize: 11 }}>{setRow?.trade_ids ? "체결 순서(차트 B/S 기준)" : "기록 순서 · 세트 분석 후 체결 순서로 정렬"}</span>
+                          <span style={{ marginLeft: "auto", fontWeight: 700, color: pnlColor(totPnl) }}>
+                            합계 {totPnl > 0 ? "+" : ""}{Math.round(totPnl).toLocaleString()}원{totAmt ? ` (${totPnl > 0 ? "+" : ""}${(totPnl / totAmt * 100).toFixed(2)}%)` : ""}
+                          </span>
+                        </>
+                      ) : (
+                        <span style={{ fontWeight: 700, color: "#8ab4f8" }}>📌 이 날 {selected.stock} 매매 1건 — 차트 B/S·놓친 기법 자리</span>
+                      )}
                     </div>
                     {setMs.map((t, i) => {
                       const cur = t.id === selected.id;
