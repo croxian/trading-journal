@@ -284,6 +284,35 @@ const TRADE_CATEGORIES = [
   "악재매매",
   "기타",
 ];
+const BASE_TECHS = TRADE_CATEGORIES.filter(c => c !== "기타");
+// '기타'에서 직접 입력해 저장한 기법들(매매 기록에서 수집) — 다음부터 선택지로 재사용
+const customTechsOf = (techs) => [...new Set(techs.filter(t => t && t !== "기타" && !TRADE_CATEGORIES.includes(t)))].sort((a, b) => a.localeCompare(b, "ko"));
+
+// 매매 기법 선택: 기본 기법 + 기타에서 추가한 기법 + 기타(직접 입력). value가 목록에 없으면 직접 입력 상태로 표시
+const TechPicker = ({ value, onChange, custom = [], style, inputStyle, emptyLabel = "선택 안함", autoFocus = false }) => {
+  const listed = (v) => BASE_TECHS.includes(v) || custom.includes(v);
+  const [typing, setTyping] = useState(() => !!value && !listed(value));
+  const selVal = typing ? "기타" : (value || "");
+  return (
+    <>
+      <select value={selVal} onChange={e => { const v = e.target.value; setTyping(v === "기타"); onChange(v); }} style={style}>
+        <option value="">{emptyLabel}</option>
+        {BASE_TECHS.map(c => <option key={c} value={c}>{c}</option>)}
+        {custom.length > 0 && (
+          <optgroup label="기타에서 추가한 기법">
+            {custom.map(c => <option key={c} value={c}>{c}</option>)}
+          </optgroup>
+        )}
+        <option value="기타">기타 (직접 입력)</option>
+      </select>
+      {typing && (
+        <input value={value === "기타" ? "" : (value || "")} onChange={e => onChange(e.target.value || "기타")}
+          placeholder="기법 직접 입력 (다음부터 목록에서 선택 가능)" autoFocus={autoFocus}
+          style={inputStyle || { ...style, marginTop: 6, border: "1px solid #4f8ef7", boxSizing: "border-box", width: "100%" }} />
+      )}
+    </>
+  );
+};
 
 // 매매 카테고리를 기법군(예: "투매")과 진입시점(예: "시초")으로 분리
 const TIMING_SUFFIXES = ["시초", "종배", "종가"];
@@ -1441,6 +1470,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
   const histRest = (v, id) => window.history.replaceState({ ...(window.history.state || {}), journalView: v, journalId: id }, "");
 
   const recentStocks = [...new Set(trades.map(t => t.stock).filter(Boolean))].slice(0, 10);
+  const customTechs = customTechsOf(trades.map(t => t.technique));   // 기타에서 직접 입력해 저장한 기법
 
   const sortTrades = (arr) => {
     const s = [...arr];
@@ -2499,11 +2529,8 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
                                       style={{ width:"100%", background:"#13151f", border:"1px solid #2a2d3a", borderRadius:6, color:"#e0e0e0", padding:"5px 7px", fontSize:12, boxSizing:"border-box", colorScheme:"dark" }} />
                                   </div>
                                   <div><div style={label11}>카테고리</div>
-                                    <select value={t.technique || ""} onChange={e => upd(i, { technique: e.target.value })}
-                                      style={{ width:"100%", background:"#13151f", border:"1px solid #2a2d3a", borderRadius:6, color:"#e0e0e0", padding:"5px 7px", fontSize:12 }}>
-                                      <option value="">없음</option>
-                                      {TRADE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                                    </select>
+                                    <TechPicker value={t.technique || ""} onChange={v => upd(i, { technique: v })} custom={customTechs} emptyLabel="없음"
+                                      style={{ width:"100%", background:"#13151f", border:"1px solid #2a2d3a", borderRadius:6, color:"#e0e0e0", padding:"5px 7px", fontSize:12, boxSizing:"border-box" }} />
                                   </div>
                                 </div>
                                 <div style={label11}>매매 이유</div>
@@ -2562,6 +2589,8 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
                     const setRow = (k, patch) => updG(x => ({ ...x, rows: x.rows.map((r, kk) => kk === k ? { ...r, ...patch } : r) }));
                     const setMeta = (tech, patch) => updG(x => ({ ...x, meta: { ...(x.meta || {}), [tech]: { ...(x.meta?.[tech] || {}), ...patch } } }));
                     const selStyle = { width: "100%", background: "#0f1117", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "5px 6px", fontSize: 12, boxSizing: "border-box" };
+                    // 저장된 사용자 기법 + 이 그룹에서 방금 직접 입력한 기법(일괄 지정·다른 행에서 바로 재사용)
+                    const groupCustom = customTechsOf([...customTechs, ...g.rows.map(r => r.tech)]);
                     return (
                       <div key={i} style={{ background: "#13151f", borderRadius: 6, overflow: "hidden", border: `1px solid ${isOpen ? "#4f8ef7" : "transparent"}` }}>
                         <div onClick={() => setExpanded0397(p => p === i ? null : i)}
@@ -2610,7 +2639,10 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
                                 <select value="" onChange={e => { const v = e.target.value; if (v) updG(x => ({ ...x, rows: x.rows.map(r => ({ ...r, tech: v })) })); }}
                                   style={{ ...selStyle, width: "auto", marginLeft: "auto" }}>
                                   <option value="">전체 행 일괄 지정…</option>
-                                  {TRADE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                                  {BASE_TECHS.map(c => <option key={c} value={c}>{c}</option>)}
+                                  {groupCustom.length > 0 && (
+                                    <optgroup label="기타에서 추가한 기법">{groupCustom.map(c => <option key={c} value={c}>{c}</option>)}</optgroup>
+                                  )}
                                 </select>
                               )}
                             </div>
@@ -2622,10 +2654,10 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
                                   {n(r.buyAmount) > 0 && <span style={{ color: "#666", marginLeft: 6 }}>{Math.round(n(r.buyAmount) / 10000).toLocaleString()}만</span>}
                                   <span style={{ marginLeft: 6, fontWeight: 600, color: pnlColor(n(r.pnl)) }}>{won(r.pnl)} ({r.pnlRate}%)</span>
                                 </div>
-                                <select value={r.tech || ""} onChange={e => setRow(k, { tech: e.target.value })} style={{ ...selStyle, borderColor: r.tech ? "#2a2d3a" : "#f39c1288" }}>
-                                  <option value="">기법 선택</option>
-                                  {TRADE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                                </select>
+                                <div>
+                                  <TechPicker value={r.tech || ""} onChange={v => setRow(k, { tech: v })} custom={groupCustom} emptyLabel="기법 선택"
+                                    style={{ ...selStyle, borderColor: r.tech ? "#2a2d3a" : "#f39c1288" }} />
+                                </div>
                                 <input value={r.note || ""} onChange={e => setRow(k, { note: e.target.value })} placeholder="메모(섞임·롤링 등)" style={selStyle} />
                               </div>
                             ))}
@@ -2710,26 +2742,8 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
                 ))}
                 <div>
                   <div style={label11}>매매 카테고리 *</div>
-                  <select
-                    value={TRADE_CATEGORIES.includes(form.technique) ? form.technique : (form.technique ? "기타" : "")}
-                    onChange={e => {
-                      const v = e.target.value;
-                      if (v !== "기타") setForm(p => ({ ...p, technique: v }));
-                      else setForm(p => ({ ...p, technique: "기타" }));
-                    }}
-                    style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, textAlign: "left" }}>
-                    <option value="">선택 안함</option>
-                    {TRADE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                  {(!TRADE_CATEGORIES.slice(0, -1).includes(form.technique) && form.technique !== "") && (
-                    <input
-                      value={form.technique === "기타" ? "" : form.technique}
-                      onChange={e => setForm(p => ({ ...p, technique: e.target.value || "기타" }))}
-                      placeholder="카테고리 직접 입력..."
-                      autoFocus
-                      style={{ width: "100%", marginTop: 6, background: "#13151f", border: "1px solid #4f8ef7", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box" }}
-                    />
-                  )}
+                  <TechPicker value={form.technique} onChange={v => setForm(p => ({ ...p, technique: v }))} custom={customTechs} autoFocus
+                    style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, textAlign: "left", boxSizing: "border-box" }} />
                 </div>
               </div>
               {[["reason","매매 이유","왜 이 자리에서 매수/매도했는지..."],["memo","메모","추가 메모..."]].map(([f,lbl,ph]) => (
@@ -3290,18 +3304,8 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
                 })}
                 <div>
                   <div style={label11}>매매 카테고리</div>
-                  <select value={TRADE_CATEGORIES.includes(editForm.technique) ? editForm.technique : (editForm.technique ? "기타" : "")}
-                    onChange={e => { const v = e.target.value; setEditForm(p => ({ ...p, technique: v !== "기타" ? v : "기타" })); }}
-                    style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13 }}>
-                    <option value="">선택 안함</option>
-                    {TRADE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                  {(!TRADE_CATEGORIES.slice(0, -1).includes(editForm.technique) && editForm.technique !== "") && (
-                    <input value={editForm.technique === "기타" ? "" : editForm.technique}
-                      onChange={e => setEditForm(p => ({ ...p, technique: e.target.value || "기타" }))}
-                      placeholder="카테고리 직접 입력..."
-                      style={{ width: "100%", marginTop: 6, background: "#13151f", border: "1px solid #4f8ef7", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box" }} />
-                  )}
+                  <TechPicker key={editForm.id} value={editForm.technique} onChange={v => setEditForm(p => ({ ...p, technique: v }))} custom={customTechs}
+                    style={{ width: "100%", background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "8px 10px", fontSize: 13, boxSizing: "border-box" }} />
                 </div>
               </div>
               {[["reason","매매 이유","왜 이 자리에서 매수/매도했는지..."],["memo","메모","추가 메모..."]].map(([f,lbl,ph]) => (
