@@ -16,7 +16,8 @@ const MODEL = APP.match(/const AI_MODEL = "([^"]+)"/)[1];
 const EFFORT = APP.match(/const AI_EFFORT = "([^"]+)"/)[1];
 const FALLBACK = "claude-fable-5-1";
 const MAX_TOKENS = 48000;   // 세트 분석은 추론+기록별 6항목이 길어 24000에서 끝(DATA)이 잘린 사례 있음
-const HDR = { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, "Content-Type": "application/json" };
+// 새 형식 비밀 키(sb_secret_...)는 apikey 헤더로만(Bearer는 JWT 전용), 예전 service_role JWT는 둘 다
+const HDR = { apikey: SB_KEY, ...(SB_KEY.startsWith("sb_secret_") ? {} : { Authorization: `Bearer ${SB_KEY}` }), "Content-Type": "application/json" };
 
 const arg = (k) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : null; };
 const LIMIT = parseInt(arg("--limit") || "0") || Infinity;

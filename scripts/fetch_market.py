@@ -23,7 +23,10 @@ def _service_key():
         sys.exit("SUPABASE_SERVICE_KEY가 없습니다 (GitHub Secret 또는 로컬 .env에 설정)")
     return k
 SB_KEY = _service_key()
-HDR = {"apikey": SB_KEY, "Authorization": f"Bearer {SB_KEY}", "Content-Type": "application/json"}
+# 새 형식 비밀 키(sb_secret_...)는 apikey 헤더로만 보냄(Bearer는 JWT 전용), 예전 service_role JWT는 둘 다
+HDR = {"apikey": SB_KEY, "Content-Type": "application/json"}
+if not SB_KEY.startswith("sb_secret_"):
+    HDR["Authorization"] = f"Bearer {SB_KEY}"
 
 def sb_get(path):
     req = urllib.request.Request(f"{SB_URL}/rest/v1/{path}", headers=HDR)

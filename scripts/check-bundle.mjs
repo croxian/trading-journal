@@ -17,6 +17,7 @@ for (const f of files) {
   const rel = path.relative(process.cwd(), f);
   for (const m of src.matchAll(/sk-ant-[A-Za-z0-9_-]{16,}/g)) problems.push(`${rel}: Anthropic API 키 ${mask(m[0])}`);
   for (const m of src.matchAll(/\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{30,})/g)) problems.push(`${rel}: GitHub 토큰 ${mask(m[0])}`);
+  for (const m of src.matchAll(/\bsb_secret_[A-Za-z0-9_-]{10,}/g)) problems.push(`${rel}: Supabase 비밀 키(sb_secret) ${mask(m[0])}`);
   // JWT 중 role이 anon이 아닌 것(service_role 등)은 서버 전용
   for (const m of src.matchAll(/eyJ[A-Za-z0-9_-]{10,}\.(eyJ[A-Za-z0-9_-]{10,})\.[A-Za-z0-9_-]{10,}/g)) {
     try {
