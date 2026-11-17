@@ -188,6 +188,25 @@ def summary_line(nx, krx_prev_close, krx_open, krx_close, krx_gap):
     return ("[NXT 보정·" + nx.get("src", "") + "] " + " → ".join(parts)) if parts else ""
 
 
+def probe(code, ymd):
+    """점검용: code_NX(NXT)와 code(KRX)로 분봉·일봉을 원본 그대로 조회해 범위·당일 행 수를 출력"""
+    for stk in (f"{code}_NX", code):
+        for api, body, key, tk in (
+            ("ka10080", {"stk_cd": stk, "tic_scope": "1", "upd_stkpc_tp": "1", "base_dt": ymd}, "stk_min_pole_chart_qry", "cntr_tm"),
+            ("ka10081", {"stk_cd": stk, "base_dt": ymd, "upd_stkpc_tp": "1"}, "stk_dt_pole_chart_qry", "dt")):
+            try:
+                rows = _chart(api, body, key, lambda r: str(r.get(tk, ""))[:8] < ymd)
+                ts = sorted(str(r.get(tk, "")) for r in rows)
+                hit = sum(1 for t in ts if t[:8] == ymd)
+                line = f"    {stk:10} {'분봉' if api == 'ka10080' else '일봉'} 행 {len(rows):4} 범위 {ts[0] if ts else '-'} ~ {ts[-1] if ts else '-'} · 해당일 {hit}"
+                if not rows:   # 목록 키가 다른지 확인용으로 응답 키를 보여줌
+                    d, _ = _post("/api/dostk/chart", body, {"api-id": api, "authorization": f"Bearer {_get_token()}"})
+                    line += f" · 응답키 {[k for k in d.keys()][:6]} · {d.get('return_code')} {d.get('return_msg')}"
+                print(line)
+            except Exception as e:
+                print(f"    {stk:10} {api} 실패 → {last_error or e}")
+
+
 # 연결 점검: python scripts/nxt_kiwoom.py  → 토큰 발급과 NXT 분봉 1회 조회 결과(사유 포함) 출력
 if __name__ == "__main__":
     import datetime as _dt

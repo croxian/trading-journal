@@ -86,6 +86,31 @@ def run_nxt_fill(limit=400, recheck=False):
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else "test"
 FORCE_ALL = (len(sys.argv) > 2 and sys.argv[2] == "all")
+if MODE == "nxt" and len(sys.argv) > 2 and sys.argv[2] == "probe":   # 미거래 판정 점검: 보정 성공/미거래 분포 + 표본 원본 조회
+    rows = sb_get(f"market_data?select=stock,date,code,data&date=gte.{nx.NXT_START}&order=date.desc")
+    ok = [r for r in rows if isinstance(r.get("data"), dict) and r["data"].get("nxt") and not r["data"]["nxt"].get("none")]
+    no = [r for r in rows if isinstance(r.get("data"), dict) and (r["data"].get("nxt") or {}).get("none")]
+    print(f"보정 성공 {len(ok)}건 / 미거래 {len(no)}건")
+    src = {}
+    for r in ok:
+        k = (r["date"][:7], r["data"]["nxt"].get("src")); src[k] = src.get(k, 0) + 1
+    print("성공 분포(월·출처): " + ", ".join(f"{m} {s_} {n}" for (m, s_), n in sorted(src.items())))
+    print("성공 표본: " + ", ".join(f"{r['stock']}({r['code']}) {r['date']}" for r in ok[:5]))
+    seen, picks = set(), []
+    for r in no:   # 월이 다른 미거래 표본 4개
+        if r["date"][:7] not in seen and r.get("code"):
+            seen.add(r["date"][:7]); picks.append(r)
+        if len(picks) >= 4: break
+    for r in picks + ([ok[0]] if ok else []):
+        ymd = r["data"]["bars"][-1]["date"].replace("-", "")
+        print(); print(f"  [{'미거래' if r in picks else '성공'}] {r['stock']} {r['code']} {ymd}")
+        nx.probe(r["code"], ymd)
+    if picks:
+        ymd = picks[-1]["data"]["bars"][-1]["date"].replace("-", "")
+        print(); print(f"  [기준] 삼성전자 005930 {ymd}")
+        nx.probe("005930", ymd)
+    sys.exit(0)
+
 if MODE == "nxt":   # python fetch_market.py nxt [recheck] → 과거 행 NXT 보정만(recheck: 사유 없이 '미거래'로 찍힌 행 재조회)
     run_nxt_fill(limit=2000, recheck=(len(sys.argv) > 2 and sys.argv[2] == "recheck")); sys.exit(0)
 
