@@ -41,17 +41,19 @@ def sb_upsert(rows):
 
 # ── NXT 보정 채우기: market_data 중 'nxt'가 없는 행에 키움 NXT 세션 시세(전일 애프터·당일 프리·애프터, 실질 갭)를 추가 ──
 # 새로 수집한 행·과거 행 모두 대상(한 번 채우면 재조회 안 함). NXT 미거래 종목은 {"none": true}로 마커.
-def run_nxt_fill(limit=400):
+def run_nxt_fill(limit=400, recheck=False):
     if not nx.enabled():
         print("NXT 보정 생략: KIWOOM_APPKEY/KIWOOM_SECRETKEY 없음", file=sys.stderr); return
     now = dt.datetime.now()
     today = dt.date.today().isoformat()
     rows = sb_get(f"market_data?select=stock,date,code,data&date=gte.{nx.NXT_START}&order=date.desc")
     todo = [r for r in rows if r.get("code") and isinstance(r.get("data"), dict) and not r["data"].get("skip")
-            and "nxt" not in r["data"] and len(r["data"].get("bars", [])) >= 2
+            and ("nxt" not in r["data"] or (recheck and r["data"]["nxt"].get("none") and "why" not in r["data"]["nxt"]))
+            and len(r["data"].get("bars", [])) >= 2
             and not (r["date"] == today and now.hour * 60 + now.minute < 20 * 60 + 5)][:limit]   # 당일은 애프터 종료(20:00) 후에만
     print(f"NXT 보정 대상 {len(todo)}건", file=sys.stderr)
     out, done, none, err = [], 0, 0, 0
+    whys, months = {}, {}   # 미거래 사유·월별 분포(점검용)
     for r in todo:
         d = dict(r["data"]); tb, pb = d["bars"][-1], d["bars"][-2]
         res = nx.compute(r["code"], tb["date"], pb["date"])
@@ -66,15 +68,26 @@ def run_nxt_fill(limit=400):
         if line and "[NXT 보정" not in d.get("summary", ""):
             d["summary"] = d.get("summary", "") + " / " + line
         out.append({"stock": r["stock"], "date": r["date"], "code": r["code"], "data": d})
-        done += 1; none += 1 if res.get("none") else 0
+        done += 1
+        if res.get("none"):
+            none += 1; w = res.get("why", "?"); whys[w] = whys.get(w, 0) + 1
+            months[r["date"][:7]] = months.get(r["date"][:7], [0, 0]); months[r["date"][:7]][0] += 1
+        else:
+            months[r["date"][:7]] = months.get(r["date"][:7], [0, 0]); months[r["date"][:7]][1] += 1
         if len(out) >= 50: sb_upsert(out); out = []
     if out: sb_upsert(out)
     print(f"NXT 보정: 완료 {done}(NXT 미거래 {none}) / 일시오류 {err}", file=sys.stderr)
+    if whys:
+        print("   미거래 사유: " + ", ".join(f"{k} {v}건" for k, v in sorted(whys.items(), key=lambda x: -x[1])), file=sys.stderr)
+    if recheck and months:
+        print("   월별(미거래/보정): " + ", ".join(f"{m} {a}/{b}" for m, (a, b) in sorted(months.items())), file=sys.stderr)
+    if err and nx.last_error:
+        print(f"   마지막 일시오류 사유: {nx.last_error}", file=sys.stderr)
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else "test"
 FORCE_ALL = (len(sys.argv) > 2 and sys.argv[2] == "all")
-if MODE == "nxt":   # python fetch_market.py nxt → 과거 행 NXT 보정만
-    run_nxt_fill(limit=2000); sys.exit(0)
+if MODE == "nxt":   # python fetch_market.py nxt [recheck] → 과거 행 NXT 보정만(recheck: 사유 없이 '미거래'로 찍힌 행 재조회)
+    run_nxt_fill(limit=2000, recheck=(len(sys.argv) > 2 and sys.argv[2] == "recheck")); sys.exit(0)
 
 # ── 신규상장 공모가(=상장일 기준가) 수집: 38커뮤니케이션 ──
 # 상장 당일은 pykrx/fdr 일봉에 '전일 종가'가 없어 등락률이 NaN이라 기준가를 알 수 없다.

@@ -68,6 +68,11 @@ def _get_token():
     return _token
 
 
+def _is_limit(rc, msg):
+    """호출 한도·일시 장애성 응답(재시도 대상)인지"""
+    return rc in ("1700", "1999") or any(w in msg for w in ("초과", "잠시 후", "일시", "limit", "Limit"))
+
+
 def _chart(api_id, body, list_key, stop):
     """연속조회하며 행을 모음. stop(row)이 True면 중단(최신→과거 순으로 내려오므로 기준일 이전이 나오면 끝)"""
     rows, cont, nkey = [], None, None
@@ -75,10 +80,22 @@ def _chart(api_id, body, list_key, stop):
         h = {"api-id": api_id, "authorization": f"Bearer {_get_token()}"}
         if cont == "Y" and nkey:
             h["cont-yn"], h["next-key"] = "Y", nkey
-        d, rh = _post("/api/dostk/chart", body, h)
-        time.sleep(0.25)   # TR 호출 한도(초당 수 회) 여유
-        if str(d.get("return_code", "0")) not in ("0", ""):
-            raise LookupError(f"{d.get('return_code')} {d.get('return_msg')}")
+        for tries in range(4):   # 호출 한도 초과는 잠시 쉬고 재시도(미거래로 오판하지 않게)
+            try:
+                d, rh = _post("/api/dostk/chart", body, h)
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and tries < 3:
+                    time.sleep(1.5 * (tries + 1)); continue
+                raise
+            time.sleep(0.3)   # TR 호출 한도(초당 수 회) 여유
+            rc, msg = str(d.get("return_code", "0")), str(d.get("return_msg", ""))
+            if rc in ("0", ""):
+                break
+            if _is_limit(rc, msg):
+                if tries < 3:
+                    time.sleep(1.5 * (tries + 1)); continue
+                raise TimeoutError(f"호출 한도 초과 지속: {rc} {msg}")
+            raise LookupError(f"{rc} {msg}")
         part = d.get(list_key) or []
         rows += part
         if not part or any(stop(r) for r in part):
@@ -119,7 +136,7 @@ def _agg(bars):
 def compute(code, date, prev_date):
     """date(당일)·prev_date(전 거래일)의 NXT 세션 시세. NXT 미거래면 {"none": True}, 일시 오류면 None"""
     if not code or date < NXT_START:
-        return {"none": True}
+        return {"none": True, "why": "NXT 개장 전"}
     d, p = date.replace("-", ""), prev_date.replace("-", "")
     try:
         today, prev = _minutes(code, d), (_minutes(code, p) if prev_date >= NXT_START else [])
@@ -137,11 +154,11 @@ def compute(code, date, prev_date):
             t = dd.get(d)
             return {"src": "일봉", "prev_last": dd[p][3] if p in dd else None,
                     "day": ({"o": t[0], "h": t[1], "l": t[2], "c": t[3]} if t else None)}
-        return {"none": True}
-    except LookupError:
-        return {"none": True}   # NXT 미상장·조회 불가 종목 → 재시도 불필요
+        return {"none": True, "why": "분봉·일봉 모두 없음"}
+    except LookupError as e:
+        return {"none": True, "why": str(e)[:80]}   # NXT 미상장·조회 불가 종목 → 재시도 불필요(사유 보관)
     except (urllib.error.URLError, TimeoutError, RuntimeError, ValueError):
-        return None             # 네트워크·토큰 등 일시 오류 → 다음 실행에 재시도
+        return None             # 네트워크·토큰·호출 한도 등 일시 오류 → 다음 실행에 재시도
 
 
 def summary_line(nx, krx_prev_close, krx_open, krx_close, krx_gap):
