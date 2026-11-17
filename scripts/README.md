@@ -33,3 +33,8 @@ KRX 일봉은 전일 애프터마켓(15:30~20:00)·당일 프리마켓(08:00~08:
 
 - 키: GitHub Secret `KIWOOM_APPKEY` / `KIWOOM_SECRETKEY` (로컬은 루트 `.env`). 없으면 보정만 생략.
 - `upload` 실행 때마다 보정 안 된 행을 최대 400건 채움(당일 행은 20:05 이후). 과거 일괄: `python scripts/fetch_market.py nxt`
+
+### 고정 IP 서버에서 실행(키움 허용 IP 필요)
+키움 REST API는 허용 IP 등록이 필요해 GitHub Actions에서는 NXT 보정이 안 된다. 오라클 등 고정 IP 서버에서:
+`curl -sL https://raw.githubusercontent.com/croxian/trading-journal/main/scripts/server/setup_oracle.sh | bash`
+→ 매일 20:30 KST `fetch_market.py upload`(KRX 수집 + NXT 보정). 서버 IP를 키움 포털 허용 IP에 등록.
