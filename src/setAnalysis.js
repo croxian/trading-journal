@@ -176,3 +176,71 @@ export const parseSetResult = (text, labels) => {
     missed: Array.isArray(data.missed) ? data.missed.filter(m => m && typeof m.technique === "string" && m.technique.trim()).slice(0, 3) : [],
   };
 };
+
+// ── 놓친 자리 → 관망 기록: 재분석 없이 즉시 카드 + 필요할 때 '추가한 관망만' 심화 분석 ──
+// 1) 빠른 카드(AI 호출 없음): 세트 분석이 이미 만든 제안(기법·시점·가격·근거·강의)과 SET 본문의 해당 줄을 그대로 옮김
+export const MISSED_CARD_HEAD = "## 🔍 놓친 자리 — AI 제안 요약";
+export const isMissedCard = (s) => String(s || "").trim().startsWith(MISSED_CARD_HEAD);
+export const isAiMissedReason = (reason) => AI_MISSED_RE.test(reason || "");
+
+// SET 본문의 '🔍 놓친 기법 자리' 블록에서 이 제안(기법명·시간)에 해당하는 줄
+const missedLinesOf = (setText, m) => {
+  const after = String(setText || "").split(/^#{2,4}[^\n]*놓친 기법 자리[^\n]*$/m)[1];
+  if (!after) return [];
+  const sec = after.split(/^#{1,3}\s/m)[0];
+  const keys = [m.technique, m.time].filter(Boolean);
+  return sec.split("\n").map(l => l.trim()).filter(l => l && keys.some(k => l.includes(k))).slice(0, 3);
+};
+
+export const buildMissedCard = (m, { setText, lectureName } = {}) => {
+  const lines = missedLinesOf(setText, m);
+  return [
+    MISSED_CARD_HEAD,
+    `- **기법**: ${m.technique}`,
+    `- **시점·가격**: ${m.time || "-"}${m.price ? ` · ${Number(m.price).toLocaleString()}원` : ""}${m.conf ? ` (확신 ${m.conf})` : ""}`,
+    m.reason ? `- **근거**: ${m.reason}` : "",
+    lectureName ? `- **근거 강의**: ${lectureName}` : "",
+    lines.length ? `\n**세트 분석 원문**\n${lines.map(l => (l.startsWith("-") ? l : `- ${l}`)).join("\n")}` : "",
+    `\n> 세트 분석이 찾은 자리를 그대로 옮긴 요약입니다(추가 비용 없음). 진입 조건·확인 신호·손절 기준·정답 시나리오까지 보려면 세트 패널의 **🔍 심화 분석**을 누르세요 — 추가한 관망 기록만 분석하고 기존 매매 분석은 그대로 둡니다.`,
+  ].filter(Boolean).join("\n");
+};
+
+// 2) 심화 분석(추가한 AI 제안 관망 기록 여러 건을 한 번에): 강의록은 관련 것만, 기존 세트 분석은 맥락으로
+export const lectureSubsetText = (techniques, ids) => {
+  const set = new Set(ids.map(Number));
+  const lines = techniques.map((t, i) => (set.has(Number(t.id)) ? lectureLine(t, i) : null)).filter(Boolean);
+  return lines.length ? lines.join("\n\n") : "(관련 강의록 없음)";
+};
+
+export const MISSED_DEEP_SYSTEM = SET_SYSTEM + " 이번 작업은 이전 세트 분석이 찾은 '놓친 기법 자리'를 관망 기록으로 추가한 것들만 깊게 분석하는 것이다. 사용자는 이 자리에서 실제로 진입하지 않았고, 매매이유도 사용자가 쓴 것이 아니다.";
+
+// items: [{label:"O1", trade, sug:{technique,time,price,reason,conf,lecture}}], others: 세트의 나머지 실제 기록(맥락)
+export const buildMissedDeepText = ({ stock, date, dayLabel, items, others, setText, lectures, marketSection, chartCount, liveImgCount, sameStockLiveNote }) =>
+  `[강의록 — 이 자리들과 관련된 것만]\n${lectures}\n\n` +
+  `[차트 판독 규칙]\n${CHART_RULES.map(r => `- ${r}`).join("\n")}\n\n` +
+  `[표기 규칙] 괄호 안 숫자는 만원 단위.\n\n` +
+  `[세트] 종목:${stock} 날짜:${date}${dayLabel}\n` +
+  `[같은 날 실제 기록 — 맥락 참고용, 이번 분석 대상 아님]\n${others.length ? others.map(t => `- 기법:${t.technique || "미지정"}${!String(t.buyPrice ?? "").trim() && !String(t.sellPrice ?? "").trim() ? " (관망)" : ` 평균매수가:${fmt(t.buyPrice)} 평균매도가:${fmt(t.sellPrice)} 실현손익:${fmt(t.pnl)}`} / 이유: ${(t.reason || "-").slice(0, 200)}`).join("\n") : "(없음)"}\n\n` +
+  (setText ? `[이전 세트 분석 — 하루 흐름·놓친 자리를 찾은 근거]\n${setText}\n\n` : "") +
+  marketSection +
+  `[첨부 이미지]\n${chartCount ? `- 처음 ${chartCount}장 = 내 매매일지 차트` : "- 내 매매일지 차트 없음 → 차트 기반 내용은 쓰지 말고 '차트 없음'으로 명시"}` +
+  (liveImgCount ? `\n- 이후 ${liveImgCount}장 = 교본 차트(동일 날짜·동일 종목 강사 실제 매매 = 정답)` : "") + "\n\n" +
+  (sameStockLiveNote ? `[동일 종목·동일 날짜 교본 - 강사 실제 매매]\n${sameStockLiveNote}\n\n` : "") +
+  `[분석 대상 — AI 제안으로 추가한 관망 기록]\n` +
+  items.map(({ label, sug }) => `[${label}] 기법:${sug.technique} 제안 시점:${sug.time || "-"} 제안 가격:${sug.price ? Number(sug.price).toLocaleString() : "-"} 확신:${sug.conf || "-"} 근거 강의 ID:${sug.lecture || "-"}\n  제안 근거: ${sug.reason || "-"}`).join("\n") + "\n\n" +
+  `[지침]\n- 각 자리를 차트·시세·강의록으로 다시 검증하라. 다시 봤을 때 트리거가 성립하지 않았거나 근거가 약하면 첫 줄에 '⚠️ 재검토: 근거 약함 — (이유)'로 밝히고 짧게 끝낼 것.\n` +
+  `- 사용자가 그 자리를 보고도 안 들어갔다고 단정하지 말 것. 실제 매매(T)의 손익을 이 기록에 섞지 말 것.\n\n` +
+  `[출력 형식] 구분자 줄은 정확히 그대로 한 줄로:\n` +
+  items.map(({ label }) => `<<<${label}>>>`).join("\n(같은 형식)\n") + "\n" +
+  `각 섹션:\n## 1. 이 자리의 근거 — 강의록 트리거가 어떻게 성립했는지(강의록 인용), 확신도\n## 2. 차트 분석 — 첫 줄에 봉 주기. 진입 전 흐름→트리거 캔들→이후 흐름\n## 3. 정답매매 시나리오 — 진입가·손절가·익절 구간(금액은 괄호 숫자=만원, 퍼센트 금지)\n## 4. 다음에 잡기 위한 체크포인트 — 트리거·확인 신호·진입 조건·손절 기준을 체크리스트로\n` +
+  `위 형식대로 ${items.map(i => i.label).join(", ")} 모두 분석하라.`;
+
+export const parseMissedDeep = (text, labels) => {
+  const parts = {};
+  const hits = [...String(text).matchAll(/^\s*<<<(O\d+)>>>\s*$/gm)];
+  hits.forEach((m, i) => { parts[m[1]] = text.slice(m.index + m[0].length, i + 1 < hits.length ? hits[i + 1].index : text.length).trim(); });
+  if (!hits.length && labels.length === 1) parts[labels[0]] = String(text).trim();
+  const missing = labels.filter(l => !parts[l]);
+  if (missing.length) throw new Error(`심화 분석 응답에 ${missing.join(", ")} 섹션이 없습니다 — 다시 시도해 주세요.`);
+  return parts;
+};
