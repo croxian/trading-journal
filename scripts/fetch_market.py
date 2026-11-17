@@ -58,7 +58,8 @@ def run_nxt_fill(limit=400):
         if res is None:
             err += 1
             if err >= 3 and done == 0:
-                print("❌ 키움 연결 실패가 반복됨 — 앱키/시크릿키·허용 IP 설정을 확인하세요. NXT 보정 중단", file=sys.stderr); break
+                print(f"❌ 키움 연결 실패가 반복됨 — 사유: {nx.last_error or '알 수 없음'}", file=sys.stderr)
+                print("   점검: python scripts/nxt_kiwoom.py (앱키/시크릿키·허용 IP·운영/모의 키 확인). NXT 보정 중단", file=sys.stderr); break
             continue
         d["nxt"] = res
         line = nx.summary_line(res, pb["c"], tb["o"], tb["c"], tb.get("gap"))

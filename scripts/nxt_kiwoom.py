@@ -33,11 +33,26 @@ def enabled():
     return bool(_env("KIWOOM_APPKEY") and _env("KIWOOM_SECRETKEY"))
 
 
+last_error = ""   # 마지막 실패 사유(키움 return_code/return_msg 또는 HTTP 오류) — 진단 출력용
+
+
 def _post(path, body, headers):
+    global last_error
     req = urllib.request.Request(BASE_URL + path, data=json.dumps(body).encode(), method="POST",
                                  headers={"Content-Type": "application/json;charset=UTF-8", **headers})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.load(r), r.headers
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.load(r), r.headers
+    except urllib.error.HTTPError as e:   # 키움은 오류도 JSON(return_code/return_msg)으로 줌 → 사유를 남김
+        try:
+            d = json.loads(e.read().decode("utf-8", "replace"))
+            last_error = f"HTTP {e.code} · {d.get('return_code')} {d.get('return_msg')}"
+        except Exception:
+            last_error = f"HTTP {e.code} {e.reason}"
+        raise
+    except urllib.error.URLError as e:
+        last_error = f"연결 오류: {e.reason}"
+        raise
 
 
 def _get_token():
@@ -45,7 +60,9 @@ def _get_token():
     if not _token:
         d, _ = _post("/oauth2/token", {"grant_type": "client_credentials", "appkey": _env("KIWOOM_APPKEY"), "secretkey": _env("KIWOOM_SECRETKEY")}, {})
         if not d.get("token"):
-            raise RuntimeError(f"키움 토큰 발급 실패: {d.get('return_code')} {d.get('return_msg')}")
+            global last_error
+            last_error = f"토큰 발급 실패: {d.get('return_code')} {d.get('return_msg')}"
+            raise RuntimeError(last_error)
         _token = d["token"]
     return _token
 
@@ -151,3 +168,25 @@ def summary_line(nx, krx_prev_close, krx_open, krx_close, krx_gap):
     if day and not pre and not af:
         parts.append(f"당일 NXT 전체(세션 구분 없음) 시{won(day['o'])}·고{won(day['h'])}·저{won(day['l'])}·종{won(day['c'])}")
     return ("[NXT 보정·" + nx.get("src", "") + "] " + " → ".join(parts)) if parts else ""
+
+
+# 연결 점검: python scripts/nxt_kiwoom.py  → 토큰 발급과 NXT 분봉 1회 조회 결과(사유 포함) 출력
+if __name__ == "__main__":
+    import datetime as _dt
+    print("키 설정:", "있음" if enabled() else "없음(.env의 KIWOOM_APPKEY/KIWOOM_SECRETKEY)")
+    try:
+        print("공인 IP:", urllib.request.urlopen("https://ifconfig.me", timeout=5).read().decode())
+    except Exception:
+        pass
+    try:
+        _get_token(); print("토큰 발급: 성공")
+    except Exception as e:
+        print("토큰 발급: 실패 →", last_error or e); raise SystemExit(1)
+    day = _dt.date.today()
+    while day.weekday() >= 5: day -= _dt.timedelta(days=1)
+    for code in ("005930",):
+        try:
+            rows = _minutes(code, day.strftime("%Y%m%d"))
+            print(f"NXT 1분봉 {code}_NX {day}: {len(rows)}개", rows[:1], rows[-1:] if rows else "")
+        except Exception as e:
+            print(f"NXT 1분봉 조회 실패 → {last_error or e}")
