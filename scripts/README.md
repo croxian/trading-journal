@@ -24,3 +24,12 @@ python scripts/fetch_market.py upload    # Supabase 업로드
 ## 참고
 - pykrx 대신 FinanceDataReader 사용(지수·종목리스트 엔드포인트가 더 안정적).
 - 상장폐지/명칭변경 종목은 매칭 실패(그 매매는 시세 없이 차트로만 분석).
+
+## NXT(넥스트레이드) 보정 — `nxt_kiwoom.py`
+KRX 일봉은 전일 애프터마켓(15:30~20:00)·당일 프리마켓(08:00~08:50)을 모르기 때문에, 애프터에서 크게 움직인 다음 날은
+'KRX 갭'이 실제 직전 가격 대비 흐름과 크게 어긋난다. 키움 REST API의 NXT 1분봉(`종목코드_NX`, ka10080)으로
+전일 애프터·당일 프리·당일 애프터 시세와 **실질 갭(KRX 시가 ÷ NXT 직전가)**을 계산해 `market_data.data.nxt`와 요약 문장에 추가한다.
+분봉이 없는 과거 날짜는 NXT 일봉(ka10081)으로 대체, NXT 미거래 종목은 `{"none": true}` 마커.
+
+- 키: GitHub Secret `KIWOOM_APPKEY` / `KIWOOM_SECRETKEY` (로컬은 루트 `.env`). 없으면 보정만 생략.
+- `upload` 실행 때마다 보정 안 된 행을 최대 400건 채움(당일 행은 20:05 이후). 과거 일괄: `python scripts/fetch_market.py nxt`

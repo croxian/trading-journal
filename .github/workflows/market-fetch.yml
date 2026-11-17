@@ -32,4 +32,6 @@ jobs:
       - name: 시세 수집 (신규만 → Supabase 업로드)
         env:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}   # 저장소 Settings → Secrets → Actions
+          KIWOOM_APPKEY: ${{ secrets.KIWOOM_APPKEY }}                 # NXT 보정(키움 REST API) — 없으면 보정만 생략
+          KIWOOM_SECRETKEY: ${{ secrets.KIWOOM_SECRETKEY }}
         run: python scripts/fetch_market.py upload

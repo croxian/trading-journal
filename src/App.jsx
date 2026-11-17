@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react
 import JSZip from "jszip";
 import * as XLSX from "xlsx";
 import { createClient } from "@supabase/supabase-js";
-import { TRADE_CATEGORIES, CHART_ANGLE_NOTE, CHART_TF_NOTE, SET_SYSTEM, buildStaticText, buildSetVariableText, parseSetResult, withMissed, parseMissed, stripMissed, AI_MISSED_PREFIX } from "./setAnalysis.js";
+import { TRADE_CATEGORIES, CHART_ANGLE_NOTE, CHART_TF_NOTE, SET_SYSTEM, buildStaticText, buildSetVariableText, parseSetResult, withMissed, parseMissed, stripMissed, AI_MISSED_PREFIX, buildMarketSection } from "./setAnalysis.js";
 
 // ==================== 상수 / 설정 ====================
 const TABS = ["🏠 대시보드", "📝 매매일지", "📊 통계", "📚 강의록", "🔴 실전매매", "📅 월간복기"];
@@ -1886,16 +1886,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
 
       // 3. KRX 실제 시세 - 차트 판독보다 우선하는 확정 사실
       let marketSection = "";
-      try {
-        const md = await sbGetMarketData(base.stock, base.date);
-        if (md?.summary) {
-          const barsTxt = (md.bars || []).map(b => `${b.date} 시${b.o} 고${b.h} 저${b.l} 종${b.c}${b.cndl ? ` ${b.cndl}(몸통${b.body}%·윗꼬리${b.upw}%·아랫꼬리${b.loww}%)` : ""} (등락 ${b.rate ?? "-"}%, 갭 ${b.gap ?? "-"}%, 장중고점 ${b.hrate ?? "-"}%${b.upper ? ", 상한가마감" : ""}${b.listing ? `, ※상장당일: 등락/갭/고점은 전일종가가 아닌 공모가 ${b.base?.toLocaleString?.() ?? b.base}원 대비` : ""})`).join('\n');
-          marketSection = `[KRX 정규장 실제 시세 - 확정 사실]\n${md.summary}\n[일별 시세]\n${barsTxt}\n` +
-            `※ 위는 한국거래소 '정규장(09:00~15:30)' 실제 데이터다. 전일 상한가 마감 여부, 지수 국면, 정규장 기준 종가 등락률은 이 수치를 확정 사실로 쓰고, 차트에서 읽은 값이 다르면 이 데이터를 따를 것.\n` +
-            `※ [NXT 예외] 차트에 09:00 이전/15:30 이후 캔들이 보이면 NXT 연장거래이며 위 KRX 데이터에 포함되지 않는다. 그 구간의 시가·갭·고저는 차트를 우선해서 해석할 것.\n` +
-            `※ 손익은 기록된 매수가·매도가·실현손익 기준.\n\n`;
-        }
-      } catch {}
+      try { marketSection = buildMarketSection(await sbGetMarketData(base.stock, base.date)); } catch {}   // KRX + NXT 보정(setAnalysis.js)
 
       // 4. 과거 유사 매매(세트 밖) 15건
       const pastTradesArr = trades.filter(t => !ids.includes(t.id) && !t.deletedAt && t.reason).slice(0, 15);

@@ -3,7 +3,7 @@
 // - 순차 실행(고정 블록 프롬프트 캐시 적중) / 진행 파일에 완료 키 기록 → 중단 후 재실행하면 이어서 처리
 // - trade_sets 테이블이 없으면 중단(scripts/trade_sets.sql 먼저 실행)
 import fs from "node:fs";
-import { SET_SYSTEM, buildStaticText, buildSetVariableText, parseSetResult, withMissed } from "../src/setAnalysis.js";
+import { SET_SYSTEM, buildStaticText, buildSetVariableText, parseSetResult, withMissed, buildMarketSection } from "../src/setAnalysis.js";
 
 const APP = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
 const SB_URL = APP.match(/const SB_URL = "([^"]+)"/)[1];
@@ -146,15 +146,8 @@ for (const [si, members] of todo.entries()) {
       return techniques.filter(t => kw.some(k => `${t.name || ""} ${t.category || ""} ${(t.tags || []).join(" ")} ${t.rawInput || ""}`.includes(k))).map(t => t.id);
     };
     const items = members.map((t, i) => ({ label: labels[i], trade: t, observe: isObserveTrade(t), relatedIds: relatedIdsOf(t.technique) }));
-    let marketSection = "";
     const md = (await sb(`market_data?stock=eq.${encodeURIComponent(base.stock)}&date=eq.${base.date}&select=data&limit=1`).catch(() => []))[0]?.data;
-    if (md?.summary) {
-      const barsTxt = (md.bars || []).map(b => `${b.date} 시${b.o} 고${b.h} 저${b.l} 종${b.c}${b.cndl ? ` ${b.cndl}(몸통${b.body}%·윗꼬리${b.upw}%·아랫꼬리${b.loww}%)` : ""} (등락 ${b.rate ?? "-"}%, 갭 ${b.gap ?? "-"}%, 장중고점 ${b.hrate ?? "-"}%${b.upper ? ", 상한가마감" : ""}${b.listing ? `, ※상장당일: 등락/갭/고점은 전일종가가 아닌 공모가 ${b.base?.toLocaleString?.() ?? b.base}원 대비` : ""})`).join("\n");
-      marketSection = `[KRX 정규장 실제 시세 - 확정 사실]\n${md.summary}\n[일별 시세]\n${barsTxt}\n` +
-        `※ 위는 한국거래소 '정규장(09:00~15:30)' 실제 데이터다. 전일 상한가 마감 여부, 지수 국면, 정규장 기준 종가 등락률은 이 수치를 확정 사실로 쓰고, 차트에서 읽은 값이 다르면 이 데이터를 따를 것.\n` +
-        `※ [NXT 예외] 차트에 09:00 이전/15:30 이후 캔들이 보이면 NXT 연장거래이며 위 KRX 데이터에 포함되지 않는다. 그 구간의 시가·갭·고저는 차트를 우선해서 해석할 것.\n` +
-        `※ 손익은 기록된 매수가·매도가·실현손익 기준.\n\n`;
-    }
+    const marketSection = buildMarketSection(md);   // KRX + NXT 보정(앱과 동일)
     const ids = members.map(t => t.id);
     const pastTradesArr = trades.filter(t => !ids.includes(t.id) && t.reason).slice(0, 15);
     const pastTrades = pastTradesArr.map(t => `[ID:${t.id}] ${t.stock}(${t.date}, ${t.pnlRate}%, 기법:${t.technique || "-"}): ${t.reason?.slice(0, 100)}`).join("\n");

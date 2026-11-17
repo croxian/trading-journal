@@ -5,6 +5,7 @@
 #   python fetch_market.py upload all   # 전체 재수집(강제)
 import json, datetime as dt, sys, os, re, urllib.request
 import FinanceDataReader as fdr
+import nxt_kiwoom as nx   # NXT(넥스트레이드) 보정 — 키움 REST API(키 없으면 생략)
 
 SB_URL = "https://vbdtrynddjryxcpgpisf.supabase.co"
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -37,8 +38,42 @@ def sb_upsert(rows):
     req = urllib.request.Request(f"{SB_URL}/rest/v1/market_data", data=json.dumps(rows).encode(), headers=h, method="POST")
     urllib.request.urlopen(req)
 
+
+# ── NXT 보정 채우기: market_data 중 'nxt'가 없는 행에 키움 NXT 세션 시세(전일 애프터·당일 프리·애프터, 실질 갭)를 추가 ──
+# 새로 수집한 행·과거 행 모두 대상(한 번 채우면 재조회 안 함). NXT 미거래 종목은 {"none": true}로 마커.
+def run_nxt_fill(limit=400):
+    if not nx.enabled():
+        print("NXT 보정 생략: KIWOOM_APPKEY/KIWOOM_SECRETKEY 없음", file=sys.stderr); return
+    now = dt.datetime.now()
+    today = dt.date.today().isoformat()
+    rows = sb_get(f"market_data?select=stock,date,code,data&date=gte.{nx.NXT_START}&order=date.desc")
+    todo = [r for r in rows if r.get("code") and isinstance(r.get("data"), dict) and not r["data"].get("skip")
+            and "nxt" not in r["data"] and len(r["data"].get("bars", [])) >= 2
+            and not (r["date"] == today and now.hour * 60 + now.minute < 20 * 60 + 5)][:limit]   # 당일은 애프터 종료(20:00) 후에만
+    print(f"NXT 보정 대상 {len(todo)}건", file=sys.stderr)
+    out, done, none, err = [], 0, 0, 0
+    for r in todo:
+        d = dict(r["data"]); tb, pb = d["bars"][-1], d["bars"][-2]
+        res = nx.compute(r["code"], tb["date"], pb["date"])
+        if res is None:
+            err += 1
+            if err >= 3 and done == 0:
+                print("❌ 키움 연결 실패가 반복됨 — 앱키/시크릿키·허용 IP 설정을 확인하세요. NXT 보정 중단", file=sys.stderr); break
+            continue
+        d["nxt"] = res
+        line = nx.summary_line(res, pb["c"], tb["o"], tb["c"], tb.get("gap"))
+        if line and "[NXT 보정" not in d.get("summary", ""):
+            d["summary"] = d.get("summary", "") + " / " + line
+        out.append({"stock": r["stock"], "date": r["date"], "code": r["code"], "data": d})
+        done += 1; none += 1 if res.get("none") else 0
+        if len(out) >= 50: sb_upsert(out); out = []
+    if out: sb_upsert(out)
+    print(f"NXT 보정: 완료 {done}(NXT 미거래 {none}) / 일시오류 {err}", file=sys.stderr)
+
 MODE = sys.argv[1] if len(sys.argv) > 1 else "test"
 FORCE_ALL = (len(sys.argv) > 2 and sys.argv[2] == "all")
+if MODE == "nxt":   # python fetch_market.py nxt → 과거 행 NXT 보정만
+    run_nxt_fill(limit=2000); sys.exit(0)
 
 # ── 신규상장 공모가(=상장일 기준가) 수집: 38커뮤니케이션 ──
 # 상장 당일은 pykrx/fdr 일봉에 '전일 종가'가 없어 등락률이 NaN이라 기준가를 알 수 없다.
@@ -109,7 +144,8 @@ if MODE == "upload" and not FORCE_ALL:
     print(f"신규(미수집) {len(pairs)}건", file=sys.stderr)
 
 if not pairs:
-    print("수집할 신규 건 없음. 종료.", file=sys.stderr)
+    print("수집할 신규 건 없음.", file=sys.stderr)
+    if MODE == "upload": run_nxt_fill()
     sys.exit(0)
 
 # 3. 종목명→코드 맵 + 지수
@@ -245,6 +281,7 @@ if MODE == "upload":
     for i in range(0, len(results), 100):
         sb_upsert(results[i:i+100])
     print(f"업로드 완료: {len(results)}건", file=sys.stderr)
+    run_nxt_fill()   # 방금 올린 행 + 아직 보정 안 된 과거 행
 else:
     json.dump(results, open(os.path.join(BASE, "market_out.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     # 상장일 등 특수 케이스가 잘 잡혔는지 우선 확인: 상장봉 포함 결과부터, 없으면 앞에서 10건

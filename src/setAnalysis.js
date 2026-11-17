@@ -101,6 +101,19 @@ const techRule = (tech) => {
 
 const fmt = (v) => (v === "" || v == null ? "-" : String(v));
 
+// KRX 시세(+NXT 보정) 블록 — market_data 행의 data({summary, bars, nxt}) → 분석 프롬프트용 텍스트(앱·일괄분석 공용)
+export const buildMarketSection = (md) => {
+  if (!md?.summary) return "";
+  const barsTxt = (md.bars || []).map(b => `${b.date} 시${b.o} 고${b.h} 저${b.l} 종${b.c}${b.cndl ? ` ${b.cndl}(몸통${b.body}%·윗꼬리${b.upw}%·아랫꼬리${b.loww}%)` : ""} (등락 ${b.rate ?? "-"}%, 갭 ${b.gap ?? "-"}%, 장중고점 ${b.hrate ?? "-"}%${b.upper ? ", 상한가마감" : ""}${b.listing ? `, ※상장당일: 등락/갭/고점은 전일종가가 아닌 공모가 ${b.base?.toLocaleString?.() ?? b.base}원 대비` : ""})`).join("\n");
+  const hasNxt = md.nxt && !md.nxt.none;
+  return `[KRX 정규장 실제 시세 - 확정 사실]\n${md.summary}\n[일별 시세]\n${barsTxt}\n` +
+    `※ 위는 한국거래소 '정규장(09:00~15:30)' 실제 데이터다. 전일 상한가 마감 여부, 지수 국면, 정규장 기준 종가 등락률은 이 수치를 확정 사실로 쓰고, 차트에서 읽은 값이 다르면 이 데이터를 따를 것.\n` +
+    (hasNxt
+      ? `※ [NXT 보정 우선] 요약의 [NXT 보정] 줄은 키움 NXT(넥스트레이드) 실제 시세다. KRX '갭'·'등락'은 전일 애프터마켓(15:30~20:00)·당일 프리마켓(08:00~08:50) 움직임을 반영하지 못하므로, 시초 갭·출발 강도·전일 마감 이후 흐름은 '실질 갭'과 NXT 세션 수치를 기준으로 판단할 것(KRX 갭이 크게 나와도 NXT에서 이미 올랐다면 실질적으론 갭이 작거나 갭하락일 수 있음). NXT 시간대 매매는 NXT 세션 고저를 기준으로 평가.\n`
+      : `※ [NXT 예외] 차트에 09:00 이전/15:30 이후 캔들이 보이면 NXT 연장거래이며 위 KRX 데이터에 포함되지 않는다. 그 구간의 시가·갭·고저는 차트를 우선해서 해석할 것(NXT 미거래 종목이거나 보정 데이터 없음).\n`) +
+    `※ 손익은 기록된 매수가·매도가·실현손익 기준.\n\n`;
+};
+
 // 세트별 가변 블록. items: [{label, trade, observe, relatedIds}], charts: [{n, labels}] (중복 제거된 내 차트), liveImgCount: 교본/실전 이미지 수
 export const buildSetVariableText = ({ stock, date, dayLabel, items, charts, liveImgCount, liveImgIsSameStock, marketSection, liveSection, sameStockLiveNote, pastTrades, correctionsCtx }) => {
   const rules = [...new Set(items.map(it => techRule(it.trade.technique)).filter(Boolean))];
