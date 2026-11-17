@@ -44,11 +44,12 @@ def _post(path, body, headers):
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.load(r), r.headers
     except urllib.error.HTTPError as e:   # 키움은 오류도 JSON(return_code/return_msg)으로 줌 → 사유를 남김
+        text = e.read().decode("utf-8", "replace")
         try:
-            d = json.loads(e.read().decode("utf-8", "replace"))
+            d = json.loads(text)
             last_error = f"HTTP {e.code} · {d.get('return_code')} {d.get('return_msg')}"
         except Exception:
-            last_error = f"HTTP {e.code} {e.reason}"
+            last_error = f"HTTP {e.code} {e.reason} · 응답: {' '.join(text.split())[:300] or '(빈 응답)'}"
         raise
     except urllib.error.URLError as e:
         last_error = f"연결 오류: {e.reason}"
@@ -174,6 +175,11 @@ def summary_line(nx, krx_prev_close, krx_open, krx_close, krx_gap):
 if __name__ == "__main__":
     import datetime as _dt
     print("키 설정:", "있음" if enabled() else "없음(.env의 KIWOOM_APPKEY/KIWOOM_SECRETKEY)")
+    for k in ("KIWOOM_APPKEY", "KIWOOM_SECRETKEY"):   # 값은 숨기고 형식만 점검(붙여넣기 실수 확인)
+        v = _env(k)
+        bad = [n for n, f in (("공백", any(c.isspace() for c in v)), ("따옴표", any(c in "\"'<>" for c in v)),
+                              ("비영문자", any(ord(c) > 127 for c in v))) if f]
+        print(f"  {k}: {len(v)}자, 앞뒤 {v[:2]}…{v[-2:] if v else ''}" + (f"  ⚠️ {'/'.join(bad)} 포함" if bad else "  (형식 이상 없음)"))
     try:
         print("공인 IP:", urllib.request.urlopen("https://ifconfig.me", timeout=5).read().decode())
     except Exception:
