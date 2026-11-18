@@ -233,6 +233,7 @@ const stockList = (s) => (s || "").split(",").map(x => x.trim()).filter(Boolean)
 // 이미지의 유효 종목: 태그가 있으면 태그, 없고 종목이 1개뿐이면 그 종목(자동), 여러 개면 미지정
 const imgStock = (im, stocks) => im.s || (stocks.length === 1 ? stocks[0] : "");
 // 관망(미진입): 매수가·매도가가 모두 비어있는 기록 = 실제 진입 없이 셋업/정답매매만 남긴 복기용 기록
+const ocrDate = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(String(d || "").trim()) ? String(d).trim() : "");   // OCR 날짜: 형식이 맞을 때만, 아니면 빈 값
 const isObserveTrade = (t) => !String(t?.buyPrice ?? "").trim() && !String(t?.sellPrice ?? "").trim();
 // 종목명 매칭(공백/별표 무시, 우선주는 정확일치). 월간복기 등 모듈 전역에서 사용
 const matchStockName = (a, b) => {
@@ -1288,6 +1289,8 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
   const [aiAnalysis, setAiAnalysis] = useState("");
   const [pending0397, setPending0397] = useState([]);
   const [bulk0397Date, setBulk0397Date] = useState("");
+  // 0606으로 시작해 0328 행별 지정 화면으로 넘어간 경우 → 저장/다음 '매매 추가' 때 0606 화면으로 되돌림
+  const back0606Ref = useRef(false);
   const [showStockDrop, setShowStockDrop] = useState(false);
   const [editTrade, setEditTrade] = useState(false);
   const [editForm, setEditForm] = useState(null);
@@ -1534,10 +1537,10 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
         const { trades: tradeList, rowCount, date: extractedDate } = await extract0397Trades(file);
         const rowCountWarn = (rowCount && rowCount !== tradeList.length) ? ` ⚠️ 행 개수 불일치(이미지 ${rowCount}행 vs 추출 ${tradeList.length}행) - 다시 시도해보세요` : "";
         if (tradeList.length > 0) {
-          const groups = toPendingGroups(tradeList, extractedDate);
+          const groups = toPendingGroups(tradeList, ocrDate(extractedDate));
           setPending0397(groups);
           setExpanded0397(groups.length === 1 ? 0 : null);
-          setBulk0397Date(extractedDate || new Date().toISOString().slice(0, 10));
+          setBulk0397Date(ocrDate(extractedDate));   // OCR로 못 읽으면 비워 둠(오늘로 자동 설정하지 않음)
           const multi = groups.filter(g => g.rows.length > 1).length;
           setFeedback(`✅ ${groups.length}개 종목 · ${tradeList.length}행 추출${multi ? ` — 행이 여러 개인 종목 ${multi}개는 펼쳐서 행마다 기법을 지정하세요` : ""}${rowCountWarn}`);
         } else {
@@ -1606,8 +1609,8 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
   };
 
   const handleBulkSave0397 = async () => {
-    if (!bulk0397Date) { setFeedback("❌ 날짜를 선택해주세요."); return; }
     if (pending0397.length === 0) return;
+    if (!bulk0397Date && pending0397.some(g => !g.date)) { setFeedback("❌ 날짜를 선택해주세요 — 0328 이미지에서 날짜를 읽지 못했습니다."); return; }
     setFeedback("");
     const base = Date.now();
     try {
@@ -1626,6 +1629,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
       await sbUpsert("trades", newTrades.map(tradeToRow));
       setTrades(p => [...[...newTrades].reverse(), ...p]);
       setPending0397([]); setExpanded0397(null);
+      if (back0606Ref.current) { back0606Ref.current = false; setInputMode("img0606"); }
       setFeedback(`✅ ${newTrades.length}개 저장됨${newTrades.length > pending0397.length ? " (기법별로 나뉜 기록은 같은 날 세트로 묶임)" : ""}`);
       setView("list");
     } catch (e) { setFeedback(`❌ ${e.message}`); }
@@ -1750,12 +1754,13 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
       // 0606 먼저 입력 + 같은 종목 0328 행이 여러 개 → 행별 기법 지정 화면으로 전환(차트·작성 중인 이유/기법 이어받음)
       if (matches.length > 1) {
         const tech = form.technique || "";
-        const groups = toPendingGroups(matches.map(m => ({ ...m, stock: form.stock || m.stock })), form.date || extractedDate, {
+        const groups = toPendingGroups(matches.map(m => ({ ...m, stock: form.stock || m.stock })), form.date || ocrDate(extractedDate), {
           chartImg, tech, meta: (form.reason || form.memo) ? { [tech]: { reason: form.reason || "", memo: form.memo || "" } } : {},
         });
         setPending0397(groups);
         setExpanded0397(0);
-        setBulk0397Date(form.date || extractedDate || new Date().toISOString().slice(0, 10));
+        setBulk0397Date(form.date || ocrDate(extractedDate));   // OCR로 못 읽으면 비워 둠
+        back0606Ref.current = true;
         setChartImg(null);
         setForm({ stock: "", date: "", buyPrice: "", sellPrice: "", amount: "", pnl: "", pnlRate: "", reason: "", technique: "", memo: "", chartDesc: "" });
         setInputMode("img0397");
@@ -1772,6 +1777,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
           pnl: match.pnl ?? f.pnl,
           pnlRate: match.pnlRate ?? f.pnlRate,
           amount: match.buyAmount ?? f.amount,
+          date: f.date || ocrDate(match.date) || ocrDate(extractedDate),   // 0328에서 읽은 날짜만(없으면 비워 둠)
         }));
         setFeedback((matches.length > 1 ? `✅ ${matches.length}건 머지됨` : "✅ 재무 데이터 채워짐") + rowCountWarn);
       } else {
@@ -2108,7 +2114,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
           const chartImg = (p.chart_index != null && compressed[p.chart_index]) ? compressed[p.chart_index] : null;
           if (!p.stock && !p.reason && !chartImg) continue; // 차트·텍스트 둘 다 인식 못하면 삭제
           results.push({
-            stock: p.stock || "", date: p.date || new Date().toISOString().slice(0, 10),
+            stock: p.stock || "", date: ocrDate(p.date),   // 슬라이드에서 읽은 날짜만(없으면 비워 둠)
             reason: p.reason || "", chartImg,
             buyPrice: "", sellPrice: "", amount: "", pnl: "", pnlRate: "", technique: "", memo: "",
           });
@@ -2122,6 +2128,8 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
 
   const handleBulkSavePpt = async () => {
     if (pendingPpt.length === 0) return;
+    const noDate = pendingPpt.map((t, i) => (t.date ? null : i + 1)).filter(Boolean);
+    if (noDate.length) { setFeedback(`❌ 날짜를 읽지 못한 슬라이드가 있습니다(${noDate.join(", ")}번) — 날짜를 선택해주세요.`); return; }
     setFeedback("");
     const base = Date.now();
     try {
@@ -2499,7 +2507,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
           }}
             style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: view === "list" && !selected && listTab === tab ? (tab === "trash" ? "#7f8c8d" : tab === "flow" ? "#2e7d32" : "#4f8ef7") : "#2a2d3a", color: view === "list" && !selected && listTab === tab ? "#fff" : "#aaa" }}>{label}</button>
         ))}
-        <button onClick={() => { if (view !== "add") window.history.pushState({ ...(window.history.state || {}), journalView: "add", journalId: undefined }, ""); setView("add"); setSelected(null); setFeedback(""); setAiAnalysis(""); setSelectMode(false); setSelectedIds(new Set()); }}
+        <button onClick={() => { if (view !== "add") window.history.pushState({ ...(window.history.state || {}), journalView: "add", journalId: undefined }, ""); setView("add"); setSelected(null); setFeedback(""); setAiAnalysis(""); setSelectMode(false); setSelectedIds(new Set()); if (back0606Ref.current && !pending0397.length) { back0606Ref.current = false; setInputMode("img0606"); } }}
           style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, background: view === "add" ? "#4f8ef7" : "#2a2d3a", color: view === "add" ? "#fff" : "#aaa" }}>매매 추가</button>
         {view === "list" && !selected && listTab !== "flow" && (
           <button onClick={() => {
@@ -2614,7 +2622,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
         <div onPaste={handlePaste}>
           <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
             {[["img0606","📈 [0606]"], ["img0397","📋 [0328]"], ["ppt","📊 PPT"], ["manual","✏️ 직접입력"]].map(([m, label]) => (
-              <button key={m} onClick={() => { setInputMode(m); setPending0397([]); setPendingPpt([]); setFeedback(""); }}
+              <button key={m} onClick={() => { back0606Ref.current = false; setInputMode(m); setPending0397([]); setPendingPpt([]); setFeedback(""); }}
                 style={{ padding: "6px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, background: inputMode === m ? "#4f8ef7" : "#2a2d3a", color: inputMode === m ? "#fff" : "#aaa" }}>{label}</button>
             ))}
           </div>
@@ -2722,8 +2730,13 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
                 <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>추출된 종목 ({pending0397.length}개 · 저장 시 {pending0397.reduce((s, g) => s + groupRecords(g).length, 0)}건)</div>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
                   <span style={{ fontSize: 12, color: "#888" }}>날짜</span>
-                  <input type="date" value={bulk0397Date} onChange={e => setBulk0397Date(e.target.value)}
-                    style={{ background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "6px 10px", fontSize: 13, colorScheme: "dark" }} />
+                  <input type="date" value={bulk0397Date} onChange={e => {
+                      const prev = bulk0397Date, v = e.target.value;
+                      setBulk0397Date(v);
+                      setPending0397(gs => gs.map(g => (!g.date || g.date === prev) ? { ...g, date: v } : g));
+                    }}
+                    style={{ background: "#13151f", border: `1px solid ${bulk0397Date ? "#2a2d3a" : "#f39c12"}`, borderRadius: 6, color: "#e0e0e0", padding: "6px 10px", fontSize: 13, colorScheme: "dark" }} />
+                  {!bulk0397Date && pending0397.some(g => !g.date) && <span style={{ fontSize: 12, color: "#f39c12" }}>0328에서 날짜를 읽지 못했습니다 — 직접 선택하세요</span>}
                 </div>
                 <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
                   {pending0397.map((g, i) => {
