@@ -1330,7 +1330,8 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
-  const [flowReport, setFlowReport] = useState(null);   // 흐름 멀티분석 결과 {content, recLectureId}
+  const [flowReport, setFlowReport] = useState(null);   // 흐름 멀티분석 결과 {content, recLectureId, row}
+  const [flowAdd, setFlowAdd] = useState(null);         // 흐름분석에 누락 매매 추가 패널 {picked:Set, q}
   const [flowReviews, setFlowReviews] = useState([]);   // 저장된 흐름분석 목록(휴지통 포함, deleted_at으로 구분)
   const [flowSearch, setFlowSearch] = useState("");
   const [tradeSets, setTradeSets] = useState(null);     // {key: row} — null이면 trade_sets 테이블 미생성
@@ -1433,6 +1434,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
         if (error) { setFeedback(`❌ 흐름분석 실패: ${error}`); return; }
         setFlowReviews(p => { const next = [result.row, ...p.filter(r => r.id !== result.row.id)]; saveFlowCache(next); return next; });
         setFlowDone(result.row);
+        setFlowReport(fr => (fr && fr.row && String(fr.row.id) === String(result.row.id)) ? { content: stripLec(result.row.content), recLectureId: parseLec(result.row.content), row: result.row } : fr);
         if (result.localOnly) setFeedback("⚠️ 흐름분석 클라우드 저장 실패(로컬 보관). flow_reviews 테이블 SQL을 실행해 주세요.");
       } else if (job.kind === "batch") {
         if (error) { setFeedback(`❌ 배치 분석 실패: ${error}`); return; }
@@ -1473,7 +1475,8 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
     {
       // 흐름분석 리포트 오버레이: 뒤로가기로 닫고, 앞으로가기(또는 리포트 링크→매매 상세에서 뒤로)로 다시 열림
       const fr = s.journalView === "flow" ? flowReviewsRef.current.find(r => String(r.id) === String(s.flowId)) : null;
-      setFlowReport(fr ? { content: stripLec(fr.content), recLectureId: parseLec(fr.content) } : null);
+      setFlowReport(fr ? { content: stripLec(fr.content), recLectureId: parseLec(fr.content), row: fr } : null);
+      setFlowAdd(null);
       if (fr) {
         setView("list"); setSelected(null); setEditTrade(false); setListTab("flow");
       } else if ((s.journalView === "detail" || s.journalView === "edit") && s.journalId) {
@@ -2334,7 +2337,11 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
   const analyzeFlowSelected = () => {
     const ids = [...selectedIds];
     if (ids.length < 2) { setFeedback("❌ 흐름분석은 2건 이상 선택하세요."); return; }
-    const ahead = jobStore.enqueue("flow", `🔗 흐름분석 ${flowLabelOf(ids.map(id => trades.find(t => t.id === id)).filter(Boolean))} (${ids.length}건)`, async (progress) => {
+    runFlow(ids);
+  };
+  // replace: 기존 흐름분석 행(누락 매매 추가 후 재분석) → 새로 만들지 않고 그 행을 갱신
+  const runFlow = (ids, replace = null) => {
+    const ahead = jobStore.enqueue("flow", `🔗 흐름분석${replace ? " 갱신" : ""} ${flowLabelOf(ids.map(id => trades.find(t => t.id === id)).filter(Boolean))} (${ids.length}건)`, async (progress) => {
       progress("분석 중…");
       // 실행 시점 최신 데이터(앞서 대기열에 넣은 배치 분석 결과가 개별분석으로 반영됨)
       const targets = (await freshTrades(ids)).sort((a, b) => (a.date || "").localeCompare(b.date || "") || a.id - b.id);
@@ -2397,6 +2404,12 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
       // 저장(클라우드; 미생성 시 로컬 보관). 추천 강의는 숨김 마커로 content에 함께 저장. 화면 반영은 저장소 구독(완료 이벤트)에서
       const title = `${stocks.slice(0, 3).join(", ")}${stocks.length > 3 ? " 외" : ""} · ${d0}~${d1} (${targets.length}건)`;
       const row = { title, trade_ids: targets.map(t => t.id).join(","), content: withLec(content, recId), created_at: new Date().toISOString() };
+      if (replace) {
+        const patch = { title: row.title, trade_ids: row.trade_ids, content: row.content };
+        if (typeof replace.id !== "number") return { row: { ...replace, ...patch }, localOnly: true };
+        try { await sbPatchFlowReview(replace.id, patch); return { row: { ...replace, ...patch } }; }
+        catch { return { row: { ...replace, ...patch }, localOnly: true }; }
+      }
       try { return { row: await sbSaveFlowReview(row) }; }
       catch { return { row: { id: `local-${Date.now()}`, ...row }, localOnly: true }; }
     });
@@ -2406,7 +2419,8 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
   // 흐름분석 리포트 열기/닫기 (히스토리 항목으로 남겨 뒤로가기로 닫힘)
   const openFlowReview = (r) => {
     window.history.pushState({ ...(window.history.state || {}), journalView: "flow", flowId: r.id }, "");
-    setFlowReport({ content: stripLec(r.content), recLectureId: parseLec(r.content) });
+    setFlowReport({ content: stripLec(r.content), recLectureId: parseLec(r.content), row: r });
+    setFlowAdd(null);
   };
   const closeFlowReport = () => {
     if (window.history.state?.journalView === "flow") window.history.back();
@@ -2507,6 +2521,69 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
               <span style={{ fontSize: 15, fontWeight: 700, color: "#8ee0a0" }}>🔗 선택 매매 흐름 복기</span>
               <button onClick={closeFlowReport} style={{ marginLeft: "auto", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 6, cursor: "pointer", fontSize: 13, padding: "4px 12px" }}>닫기 ✕</button>
             </div>
+            {flowReport.row && (() => {
+              const inc = new Set(String(flowReport.row.trade_ids || "").split(",").filter(Boolean).map(Number));
+              const incTrades = trades.filter(t => inc.has(t.id)).sort((a, b) => (a.date || "").localeCompare(b.date || "") || a.id - b.id);
+              if (!incTrades.length) return null;
+              const stocksIn = [...new Set(incTrades.map(t => t.stock).filter(Boolean))];
+              const d0 = incTrades[0].date, d1 = incTrades[incTrades.length - 1].date;
+              const shift = (d, n) => { const x = new Date(`${d}T00:00:00`); x.setDate(x.getDate() + n); return x.toLocaleDateString("sv-SE"); };
+              const lo = shift(d0, -14), hi = shift(d1, 14);
+              // 후보: 같은 종목, 흐름 기간 ±14일, 아직 포함 안 된 매매(관망 기록 포함)
+              const cands = trades.filter(t => !t.deletedAt && !inc.has(t.id) && t.date >= lo && t.date <= hi && stocksIn.some(x => matchStock(x, t.stock)))
+                .sort((a, b) => (a.date || "").localeCompare(b.date || "") || a.id - b.id);
+              const matcher = flowAdd?.q ? makeMatcher(flowAdd.q) : null;
+              const found = matcher ? trades.filter(t => !t.deletedAt && !inc.has(t.id) && !cands.includes(t) && matcher(`${t.stock || ""} ${t.reason || ""} ${t.memo || ""}`))
+                .sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 30) : [];
+              const picked = flowAdd?.picked || new Set();
+              const toggle = (id) => setFlowAdd(f => { const n = new Set(f?.picked || []); n.has(id) ? n.delete(id) : n.add(id); return { ...(f || {}), picked: n }; });
+              const pill = { fontSize: 11, padding: "1px 6px", borderRadius: 4, color: "#fff" };
+              const Row = (t) => {
+                const on = picked.has(t.id), out = t.date < d0 || t.date > d1;
+                return (
+                  <label key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 8px", borderRadius: 6, cursor: "pointer", background: on ? "#1f2a3d" : "transparent", border: `1px solid ${on ? "#4f8ef7" : "#2a2d3a"}`, fontSize: 12.5, flexWrap: "wrap" }}>
+                    <input type="checkbox" checked={on} onChange={() => toggle(t.id)} style={{ accentColor: "#4f8ef7" }} />
+                    <span style={{ color: "#aaa", fontVariantNumeric: "tabular-nums" }}>{t.date}</span>
+                    <span style={{ fontWeight: 600 }}>{t.stock}</span>
+                    {t.technique && <span style={{ ...pill, background: categoryColor(t.technique) }}>{t.technique}</span>}
+                    {isObserveTrade(t) ? <span style={{ color: "#888" }}>관망</span>
+                      : t.pnlRate !== "" && t.pnlRate != null && <span style={{ color: pnlColor(parseFloat(t.pnlRate)) }}>{parseFloat(t.pnlRate) > 0 ? "+" : ""}{t.pnlRate}%</span>}
+                    {out && <span style={{ color: "#f0b232", fontSize: 11 }}>기간 밖</span>}
+                  </label>
+                );
+              };
+              return (
+                <div style={{ marginBottom: 12, padding: "8px 10px", background: "#141a24", border: "1px solid #2a3a5a", borderRadius: 8, fontSize: 12.5 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <span style={{ color: "#8ab4f8", fontWeight: 600 }}>포함된 매매 {incTrades.length}건</span>
+                    <span style={{ color: "#666", fontSize: 11 }}>{d0} ~ {d1}</span>
+                    <button onClick={() => setFlowAdd(f => f ? null : { picked: new Set(), q: "" })}
+                      style={{ marginLeft: "auto", padding: "3px 10px", background: flowAdd ? "#2a2d3a" : "#1f2a3d", border: "1px solid #4f8ef7", color: "#8ab4f8", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>
+                      {flowAdd ? "닫기" : `＋ 누락된 매매 추가${cands.length ? ` (같은 종목 후보 ${cands.length})` : ""}`}
+                    </button>
+                  </div>
+                  {flowAdd && (
+                    <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+                      <div style={{ color: "#888", fontSize: 11.5 }}>같은 종목 · 흐름 기간 ±14일 중 빠진 매매{cands.length ? "" : " — 없음"}</div>
+                      {cands.map(Row)}
+                      <input id="flow-add-search" value={flowAdd.q || ""} onChange={e => setFlowAdd(f => ({ ...(f || {}), q: e.target.value }))}
+                        placeholder="다른 종목·매매 검색(종목명·매매이유)"
+                        style={{ background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "6px 10px", fontSize: 12.5 }} />
+                      {found.map(Row)}
+                      {flowAdd.q && !found.length && <div style={{ color: "#666", fontSize: 11.5 }}>검색 결과 없음</div>}
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <button disabled={!picked.size}
+                          onClick={() => { runFlow([...inc, ...picked], flowReport.row); setFlowAdd(null); closeFlowReport(); }}
+                          style={{ padding: "5px 12px", background: picked.size ? "#2e7d32" : "#333", border: "none", color: "#fff", borderRadius: 6, cursor: picked.size ? "pointer" : "default", fontSize: 12.5 }}>
+                          {picked.size ? `${picked.size}건 추가하고 다시 분석` : "추가할 매매를 고르세요"}
+                        </button>
+                        <span style={{ color: "#666", fontSize: 11 }}>같은 흐름분석이 {incTrades.length + picked.size}건으로 갱신됩니다(새로 만들지 않음) · 흐름분석 1회 비용</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             <div style={{ ...val14, background: "#12301a", border: "1px solid #2e7d32", whiteSpace: "normal", lineHeight: 1.7 }}>
               <MD text={flowReport.content} onTradeLink={(id) => { const t = trades.find(x => x.id === id); if (t) { setFlowReport(null); openDetail(t); } }} />
             </div>
