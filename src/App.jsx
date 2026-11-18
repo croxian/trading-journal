@@ -1519,15 +1519,34 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
   const recentStocks = [...new Set(trades.map(t => t.stock).filter(Boolean))].slice(0, 10);
   const customTechs = customTechsOf(trades.map(t => t.technique));   // 기타에서 직접 입력해 저장한 기법
 
+  // 날짜순 정렬에선 같은 날·같은 종목(세트) 기록을 붙여 보여줌. 세트 위치 = 실제 기록(AI 제안 관망 제외)이 처음 나오는 자리
+  // → 나중에 추가한 AI 제안 관망이 id가 최신이라 맨 위로 튀지 않고 파생된 세트 옆에 붙음. 세트 안은 체결 순서(trade_ids), 없으면 AI 제안을 뒤로
+  const groupSets = (arr) => {
+    const gs = new Map();
+    arr.forEach((t, i) => {
+      const k = `${t.date}|${(t.stock || "").trim()}`;
+      let g = gs.get(k);
+      if (!g) gs.set(k, (g = { pos: Infinity, first: i, items: [] }));
+      g.items.push(t);
+      if (!isAiMissedReason(t.reason)) g.pos = Math.min(g.pos, i);
+    });
+    const at = (g) => (g.pos === Infinity ? g.first : g.pos);
+    return [...gs.values()].sort((a, b) => at(a) - at(b)).flatMap(g => {
+      if (g.items.length < 2) return g.items;
+      const order = tradeSets?.[setKeyOf(g.items)]?.trade_ids?.split(",").map(Number);
+      if (order && g.items.every(t => order.includes(t.id))) return [...g.items].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+      return [...g.items.filter(t => !isAiMissedReason(t.reason)), ...g.items.filter(t => isAiMissedReason(t.reason))];
+    });
+  };
   const sortTrades = (arr) => {
     const s = [...arr];
     switch (sortBy) {
-      case "date_asc":     return s.sort((a,b) => (a.date||"").localeCompare(b.date||"") || a.id - b.id);
+      case "date_asc":     return groupSets(s.sort((a,b) => (a.date||"").localeCompare(b.date||"") || a.id - b.id));
       case "pnlRate_desc": return s.sort((a,b) => (parseFloat(b.pnlRate)||0) - (parseFloat(a.pnlRate)||0));
       case "pnlRate_asc":  return s.sort((a,b) => (parseFloat(a.pnlRate)||0) - (parseFloat(b.pnlRate)||0));
       case "pnl_desc":     return s.sort((a,b) => (parseFloat(b.pnl)||0) - (parseFloat(a.pnl)||0));
       case "pnl_asc":      return s.sort((a,b) => (parseFloat(a.pnl)||0) - (parseFloat(b.pnl)||0));
-      default:             return s.sort((a,b) => (b.date||"").localeCompare(a.date||"") || b.id - a.id);
+      default:             return groupSets(s.sort((a,b) => (b.date||"").localeCompare(a.date||"") || b.id - a.id));
     }
   };
   const applyTechFilter = (arr) => techFilter.size === 0 ? arr : arr.filter(t => techFilter.has(t.technique));
