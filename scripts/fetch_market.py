@@ -3,8 +3,8 @@
 #   python fetch_market.py test        # 검증(로컬 출력만, 업로드 안 함)
 #   python fetch_market.py upload       # 신규(미수집) 종목·날짜만 수집 -> 업로드  ← 매일 자동 실행용
 #   python fetch_market.py upload all   # 전체 재수집(강제)
-import json, datetime as dt, sys, os, re, urllib.request
-import FinanceDataReader as fdr
+#   python fetch_market.py quick        # 최근 작성·최근 날짜 매매 중 시세 없는 것만 즉시 수집(+NXT) ← 서버 크론 1분마다(할 일 없으면 조용히 종료)
+import json, datetime as dt, sys, os, re, urllib.request, urllib.parse
 import nxt_kiwoom as nx   # NXT(넥스트레이드) 보정 — 키움 REST API(키 없으면 생략)
 
 SB_URL = "https://vbdtrynddjryxcpgpisf.supabase.co"
@@ -41,12 +41,26 @@ def sb_upsert(rows):
 
 # ── NXT 보정 채우기: market_data 중 'nxt'가 없는 행에 키움 NXT 세션 시세(전일 애프터·당일 프리·애프터, 실질 갭)를 추가 ──
 # 새로 수집한 행·과거 행 모두 대상(한 번 채우면 재조회 안 함). NXT 미거래 종목은 {"none": true}로 마커.
-def run_nxt_fill(limit=400, recheck=False):
+def _nxt_row(r):
+    """market_data 행(data에 bars) → NXT 보정을 붙인 새 행과 결과. 일시 오류면 (None, None)"""
+    d = dict(r["data"]); tb, pb = d["bars"][-1], d["bars"][-2]
+    res = nx.compute(r["code"], tb["date"], pb["date"])
+    if res is None:
+        return None, None
+    d["nxt"] = res
+    line = nx.summary_line(res, pb["c"], tb["o"], tb["c"], tb.get("gap"))
+    if line and "[NXT 보정" not in d.get("summary", ""):
+        d["summary"] = d.get("summary", "") + " / " + line
+    return {"stock": r["stock"], "date": r["date"], "code": r["code"], "data": d}, res
+
+
+def run_nxt_fill(limit=400, recheck=False, rows=None):
     if not nx.enabled():
         print("NXT 보정 생략: KIWOOM_APPKEY/KIWOOM_SECRETKEY 없음", file=sys.stderr); return
     now = dt.datetime.now()
     today = dt.date.today().isoformat()
-    rows = sb_get(f"market_data?select=stock,date,code,data&date=gte.{nx.NXT_START}&order=date.desc")
+    if rows is None:
+        rows = sb_get(f"market_data?select=stock,date,code,data&date=gte.{nx.NXT_START}&order=date.desc")
     todo = [r for r in rows if r.get("code") and isinstance(r.get("data"), dict) and not r["data"].get("skip")
             and ("nxt" not in r["data"] or (recheck and r["data"]["nxt"].get("none") and "why" not in r["data"]["nxt"]))
             and len(r["data"].get("bars", [])) >= 2
@@ -55,19 +69,14 @@ def run_nxt_fill(limit=400, recheck=False):
     out, done, none, err = [], 0, 0, 0
     whys, months = {}, {}   # 미거래 사유·월별 분포(점검용)
     for r in todo:
-        d = dict(r["data"]); tb, pb = d["bars"][-1], d["bars"][-2]
-        res = nx.compute(r["code"], tb["date"], pb["date"])
+        new, res = _nxt_row(r)
         if res is None:
             err += 1
             if err >= 3 and done == 0:
                 print(f"❌ 키움 연결 실패가 반복됨 — 사유: {nx.last_error or '알 수 없음'}", file=sys.stderr)
                 print("   점검: python scripts/nxt_kiwoom.py (앱키/시크릿키·허용 IP·운영/모의 키 확인). NXT 보정 중단", file=sys.stderr); break
             continue
-        d["nxt"] = res
-        line = nx.summary_line(res, pb["c"], tb["o"], tb["c"], tb.get("gap"))
-        if line and "[NXT 보정" not in d.get("summary", ""):
-            d["summary"] = d.get("summary", "") + " / " + line
-        out.append({"stock": r["stock"], "date": r["date"], "code": r["code"], "data": d})
+        out.append(new)
         done += 1
         if res.get("none"):
             none += 1; w = res.get("why", "?"); whys[w] = whys.get(w, 0) + 1
@@ -86,6 +95,37 @@ def run_nxt_fill(limit=400, recheck=False):
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else "test"
 FORCE_ALL = (len(sys.argv) > 2 and sys.argv[2] == "all")
+_now_min = lambda: dt.datetime.now().hour * 60 + dt.datetime.now().minute
+NXT_READY = lambda date: not (date == dt.date.today().isoformat() and _now_min() < 20 * 60 + 5)   # 당일 NXT는 애프터(20:00) 종료 후
+
+# ── quick: 서버 크론이 1분마다 실행. 최근 3일 안에 작성했거나 날짜가 최근 21일인 매매만 보고(가벼운 조회 2번),
+#    시세가 없는 종목·날짜는 바로 수집(+NXT 보정), 시세는 있는데 NXT가 비어 있으면 보정만. 할 일이 없으면 출력 없이 종료.
+missing = []
+if MODE == "quick":
+    today = dt.date.today().isoformat()
+    since_id = int((dt.datetime.now() - dt.timedelta(days=3)).timestamp() * 1000)   # 매매 id = 작성 시각(ms)
+    since_d = (dt.date.today() - dt.timedelta(days=21)).isoformat()
+    rec = sb_get(f"trades?select=stock,date&deleted_at=is.null&or=(id.gt.{since_id},date.gte.{since_d})")
+    qp = sorted({(r["stock"], r["date"]) for r in rec if r.get("stock") and r.get("date")
+                 and not (r["date"] == today and _now_min() < 18 * 60 + 30)})   # 당일은 장 마감(18:30) 후
+    if not qp:
+        sys.exit(0)
+    dates = ",".join(sorted({d for _, d in qp}))
+    have = {(r["stock"], r["date"]): r for r in sb_get(
+        f"market_data?select=stock,date,nxt:data->nxt,skip:data->skip,b1:data->bars->1->>date&date=in.({dates})")}
+    missing = [p for p in qp if p not in have]
+    need_nxt = [p for p in qp if p in have and nx.enabled() and have[p].get("nxt") is None and not have[p].get("skip")
+                and have[p].get("b1") and NXT_READY(p[1])]
+    if not missing and not need_nxt:
+        sys.exit(0)
+    print(f"[{dt.datetime.now():%m-%d %H:%M}] 빠른 수집 — 시세 없음 {len(missing)}건, NXT 보정 대기 {len(need_nxt)}건", file=sys.stderr)
+    if need_nxt:
+        rows = []
+        for st, d in need_nxt[:20]:
+            rows += sb_get(f"market_data?select=stock,date,code,data&stock=eq.{urllib.parse.quote(st)}&date=eq.{d}")
+        run_nxt_fill(rows=rows)
+    if not missing:
+        sys.exit(0)
 if MODE == "nxt" and len(sys.argv) > 2 and sys.argv[2] == "probe":   # 미거래 판정 점검: 보정 성공/미거래 분포 + 표본 원본 조회
     rows = sb_get(f"market_data?select=stock,date,code,data&date=gte.{nx.NXT_START}&order=date.desc")
     ok = [r for r in rows if isinstance(r.get("data"), dict) and r["data"].get("nxt") and not r["data"]["nxt"].get("none")]
@@ -153,34 +193,37 @@ def ipo_base_price(code, listing_date, maxpage=60):
     rec = _ipo_cache.get(code)
     return rec[1] if rec and rec[0] == listing_date else None
 
-# 1. 매매일지 고유 종목·날짜
-trades = sb_get("trades?select=stock,date&deleted_at=is.null&order=date.desc")
-seen = {}
-for t in trades:
-    if t.get("stock") and t.get("date"):
-        seen[(t["stock"], t["date"])] = True
-pairs = list(seen.keys())
-print(f"매매일지 고유 종목·날짜 {len(pairs)}건", file=sys.stderr)
+if MODE == "quick":
+    pairs = missing
+else:
+    # 1. 매매일지 고유 종목·날짜
+    trades = sb_get("trades?select=stock,date&deleted_at=is.null&order=date.desc")
+    seen = {}
+    for t in trades:
+        if t.get("stock") and t.get("date"):
+            seen[(t["stock"], t["date"])] = True
+    pairs = list(seen.keys())
+    print(f"매매일지 고유 종목·날짜 {len(pairs)}건", file=sys.stderr)
 
-# 안전장치: 오늘 날짜 매매는 장 마감(18:30) 후에만 수집(장중엔 일봉 미확정 → 잘못 저장 방지)
-today = dt.date.today().isoformat()
-now = dt.datetime.now()
-if (now.hour * 60 + now.minute) < 18 * 60 + 30:
-    n_today = sum(1 for p in pairs if p[1] == today)
-    if n_today:
-        pairs = [p for p in pairs if p[1] != today]
-        print(f"당일({today}) 매매 {n_today}건은 장 마감 후 수집(현재 미확정) → 이번엔 스킵", file=sys.stderr)
+    # 안전장치: 오늘 날짜 매매는 장 마감(18:30) 후에만 수집(장중엔 일봉 미확정 → 잘못 저장 방지)
+    today = dt.date.today().isoformat()
+    now = dt.datetime.now()
+    if (now.hour * 60 + now.minute) < 18 * 60 + 30:
+        n_today = sum(1 for p in pairs if p[1] == today)
+        if n_today:
+            pairs = [p for p in pairs if p[1] != today]
+            print(f"당일({today}) 매매 {n_today}건은 장 마감 후 수집(현재 미확정) → 이번엔 스킵", file=sys.stderr)
 
-# 2. 이미 수집된 것 제외 (upload & not all) → 신규만
-if MODE == "upload" and not FORCE_ALL:
-    existing = set()
-    try:
-        for r in sb_get("market_data?select=stock,date"):
-            existing.add((r["stock"], r["date"]))
-    except Exception as e:
-        print("기존 조회 실패(전체 수집으로 진행):", str(e)[:60], file=sys.stderr)
-    pairs = [p for p in pairs if p not in existing]
-    print(f"신규(미수집) {len(pairs)}건", file=sys.stderr)
+    # 2. 이미 수집된 것 제외 (upload & not all) → 신규만
+    if MODE == "upload" and not FORCE_ALL:
+        existing = set()
+        try:
+            for r in sb_get("market_data?select=stock,date"):
+                existing.add((r["stock"], r["date"]))
+        except Exception as e:
+            print("기존 조회 실패(전체 수집으로 진행):", str(e)[:60], file=sys.stderr)
+        pairs = [p for p in pairs if p not in existing]
+        print(f"신규(미수집) {len(pairs)}건", file=sys.stderr)
 
 if not pairs:
     print("수집할 신규 건 없음.", file=sys.stderr)
@@ -188,6 +231,7 @@ if not pairs:
     sys.exit(0)
 
 # 3. 종목명→코드 맵 + 지수
+import FinanceDataReader as fdr   # 무거운 import(pandas) — 실제 수집할 때만
 print("종목 리스트 로딩...", file=sys.stderr)
 name2code = {}
 for market in ["KRX", "ETF/KR"]:
@@ -316,11 +360,17 @@ for i, (stock, date) in enumerate(pairs):
 print(f"수집: 성공 {ok} / 영구실패(마커) {nocode} / 재시도대상 {retry} / 대상 {len(pairs)}", file=sys.stderr)
 
 # 5. 업로드 또는 검증 출력
-if MODE == "upload":
+if MODE in ("upload", "quick"):
+    if MODE == "quick" and nx.enabled():
+        for i, r in enumerate(results):
+            if r.get("code") and len(r["data"].get("bars", [])) >= 2 and NXT_READY(r["date"]):
+                new, _ = _nxt_row(r)
+                if new: results[i] = new   # 일시 오류면 보정 없이 올리고 다음 실행(1분 뒤)에 보정
     for i in range(0, len(results), 100):
         sb_upsert(results[i:i+100])
     print(f"업로드 완료: {len(results)}건", file=sys.stderr)
-    run_nxt_fill()   # 방금 올린 행 + 아직 보정 안 된 과거 행
+    if MODE == "upload":
+        run_nxt_fill()   # 방금 올린 행 + 아직 보정 안 된 과거 행
 else:
     json.dump(results, open(os.path.join(BASE, "market_out.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     # 상장일 등 특수 케이스가 잘 잡혔는지 우선 확인: 상장봉 포함 결과부터, 없으면 앞에서 10건

@@ -31,16 +31,20 @@ EOF
 fi
 chmod 600 "$DIR/.env"
 
-echo "== 4/4 크론(매일 20:30 한국시간)"
+echo "== 4/4 크론(매일 20:30 전체 + 1분마다 새 매매 즉시 수집)"
 # 서버 시간대와 무관하게 KST 20:30에 맞춤(서버가 UTC면 11:30). 스크립트 내부 시간 판단도 TZ=Asia/Seoul로 실행
 read -r H M < <(python3 -c "import datetime as d;k=d.timezone(d.timedelta(hours=9));t=d.datetime.now(k).replace(hour=20,minute=30).astimezone();print(t.hour,t.minute)")
-LINE="$M $H * * * cd $DIR && git pull -q --ff-only; TZ=Asia/Seoul $DIR/.venv/bin/python scripts/fetch_market.py upload >> $DIR/market_fetch.log 2>&1"
-( crontab -l 2>/dev/null | grep -v 'scripts/fetch_market.py' || true; echo "$LINE" ) | crontab -
+LOCK=/tmp/trading-journal-market.lock
+LINE="$M $H * * * cd $DIR && git pull -q --ff-only; TZ=Asia/Seoul flock -w 900 $LOCK $DIR/.venv/bin/python scripts/fetch_market.py upload >> $DIR/market_fetch.log 2>&1"
+# 1분마다: 새로 쓴 매매일지의 시세를 바로 수집(+NXT). 할 일 없으면 조회 2번만 하고 조용히 끝남
+QUICK="* * * * * cd $DIR && TZ=Asia/Seoul flock -n $LOCK $DIR/.venv/bin/python scripts/fetch_market.py quick >> $DIR/market_quick.log 2>&1"
+( crontab -l 2>/dev/null | grep -v 'scripts/fetch_market.py' || true; echo "$LINE"; echo "$QUICK" ) | crontab -
 echo "   등록됨: $LINE"
+echo "   등록됨: $QUICK"
 
 echo
 echo "✅ 설정 완료"
 echo "   이 서버의 공인 IP(키움 포털 '허용 IP'에 등록): $(curl -s --max-time 5 ifconfig.me || echo '확인 실패')"
 echo "   .env 값을 채운 뒤 과거 날짜 NXT 보정 한 번 실행:"
 echo "     cd $DIR && TZ=Asia/Seoul .venv/bin/python scripts/fetch_market.py nxt"
-echo "   실행 기록: tail -n 30 $DIR/market_fetch.log"
+echo "   실행 기록: tail -n 30 $DIR/market_fetch.log   (즉시 수집: tail -n 30 $DIR/market_quick.log)"

@@ -92,6 +92,20 @@ const sbGetMarketData = async (stock, date) => {
     return d[0]?.data || null;
   } catch { return null; }
 };
+// 매매일지를 저장하면 서버(춘천)가 1분 안에 그 종목·날짜 시세를 수집(+NXT 보정)한다.
+// 분석을 바로 눌러 아직 없으면 최대 3분 기다림. 당일 매매는 장 마감(18:30) 후에만 수집되므로 그 전엔 기다리지 않음
+const waitMarketData = async (stock, date, onWait) => {
+  let md = await sbGetMarketData(stock, date);
+  if (md) return md;
+  const now = new Date(), today = now.toLocaleDateString("sv-SE");   // 로컬(한국) 날짜 YYYY-MM-DD
+  if (!date || date > today || (date === today && now.getHours() * 60 + now.getMinutes() < 18 * 60 + 31)) return null;
+  for (let i = 0; i < 12 && !md; i++) {
+    onWait?.();
+    await new Promise(r => setTimeout(r, 15000));
+    md = await sbGetMarketData(stock, date);
+  }
+  return md;
+};
 const sbDelete = async (table, id) => {
   const r = await fetch(`${SB_URL}/rest/v1/${table}?id=eq.${id}`, { method: "DELETE", headers: HDR });
   if (!r.ok) throw new Error(await r.text());
@@ -1916,7 +1930,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
       // 강의록: 제안의 근거 강의 + 기법 키워드 매칭(기법당 최대 3개)
       const lecIds = [...new Set(items.flatMap(({ sug }) => [Number(sug.lecture) || null, ...relatedLecIdsOf(sug.technique).slice(0, 3)]).filter(Boolean))];
       let marketSection = "";
-      try { marketSection = buildMarketSection(await sbGetMarketData(head.stock, head.date)); } catch {}
+      try { marketSection = buildMarketSection(await waitMarketData(head.stock, head.date, () => onBg?.(bgId, `⏳ 시세 수집 대기 중… ${head.stock} (저장 후 1분 안에 서버가 수집)`))); } catch {}
       // 동일 종목·동일 날짜 교본(강사 B/S)은 놓친 자리의 핵심 근거라 포함
       let sameStockLiveNote = "";
       const liveImgs = [];
@@ -1985,7 +1999,8 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
 
       // 3. KRX 실제 시세 - 차트 판독보다 우선하는 확정 사실
       let marketSection = "";
-      try { marketSection = buildMarketSection(await sbGetMarketData(base.stock, base.date)); } catch {}   // KRX + NXT 보정(setAnalysis.js)
+      // KRX + NXT 보정(setAnalysis.js). 방금 쓴 매매라 아직 수집 전이면 서버 수집을 잠깐 기다림
+      try { marketSection = buildMarketSection(await waitMarketData(base.stock, base.date, () => isDetail && onBg?.(bgId, `⏳ 시세 수집 대기 중… ${base.stock} (저장 후 1분 안에 서버가 수집)`))); } catch {}
 
       // 4. 과거 유사 매매(세트 밖) 15건
       const pastTradesArr = trades.filter(t => !ids.includes(t.id) && !t.deletedAt && t.reason).slice(0, 15);
@@ -2577,7 +2592,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
             </>
           );
         })()}
-        <button onClick={triggerCollect} title="KRX 시세 지금 수집(GitHub Actions 즉시 실행) — 매일 20시대 자동 수집도 됨"
+        <button onClick={triggerCollect} title="보통은 필요 없음: 매매일지를 저장하면 1분 안에 서버가 시세(+NXT 보정)를 자동 수집합니다. 서버가 멈췄을 때 GitHub Actions로 수동 수집(NXT 보정 제외)"
           style={{ marginLeft: "auto", padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>📈 시세 수집</button>
         <button onClick={load} style={{ padding: "4px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 5, cursor: "pointer", fontSize: 12 }}>🔄</button>
       </div>
