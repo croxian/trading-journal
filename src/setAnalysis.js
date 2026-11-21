@@ -86,7 +86,8 @@ const lectureLine = (t, i) =>
 export const buildStaticText = ({ techniques, lectureLives }) =>
   `[강의록 DB — 전체 ${techniques.length}개. 분석의 1차 근거]\n${techniques.map(lectureLine).join("\n\n")}\n\n` +
   `[실전 강의 — 강사가 남긴 상세 실전 강의. 강의록과 동등하게 근거로 활용]\n` +
-  `${lectureLives.length ? lectureLives.map(t => `[${t.title || t.stock || "실전강의"}]${t.date ? ` (${t.date})` : ""}\n${(t.textContent || "").slice(0, 1800)}`).join("\n---\n") : "(없음)"}\n\n` +
+  `${lectureLives.length ? lectureLives.map(t => `[${t.title || t.stock || "실전강의"}]${t.date ? ` (${t.date})` : ""}\n${(t.textContent || "").slice(0, 1800)}` +
+    (t.aiAnalysis ? `\n[AI 정리 — 원문·스크린샷 내용 포함]\n${String(t.aiAnalysis).replace(/<!--[\s\S]*?-->/g, "").trim().slice(0, 3000)}` : "")).join("\n---\n") : "(없음)"}\n\n` +
   `[차트 판독 규칙]\n${CHART_RULES.map(r => `- ${r}`).join("\n")}\n\n` +
   `[표기 규칙] 매매이유에서 괄호 안 숫자는 만원 단위임. 예: (+50)=+50만원 수익, (1000)=1000만원 매수금액, (-30)=-30만원 손실.\n\n` +
   ANALYSIS_GUIDE;
@@ -119,13 +120,14 @@ export const buildMarketSection = (md) => {
 };
 
 // 세트별 가변 블록. items: [{label, trade, observe, relatedIds}], charts: [{n, labels}] (중복 제거된 내 차트), liveImgCount: 교본/실전 이미지 수
-export const buildSetVariableText = ({ stock, date, dayLabel, items, charts, liveImgCount, liveImgIsSameStock, marketSection, liveSection, sameStockLiveNote, pastTrades, correctionsCtx }) => {
+export const buildSetVariableText = ({ stock, date, dayLabel, items, charts, liveImgCount, liveImgDropped, liveImgIsSameStock, marketSection, liveSection, sameStockLiveNote, pastTrades, correctionsCtx }) => {
   const rules = [...new Set(items.map(it => techRule(it.trade.technique)).filter(Boolean))];
   const chartNote = charts.length
     ? charts.map(c => `- 차트${c.n} = 내 매매일지 차트 (${c.labels.join("·")} 공용)`).join("\n")
     : "- 내 매매일지 차트 없음 → 차트 기반 분석·마커 배정은 하지 말고 '차트 없음'으로 명시(markers는 빈 배열)";
   const liveNote = liveImgCount
-    ? `\n- 이후 ${liveImgCount}장 = ${liveImgIsSameStock ? `교본 차트(동일 날짜·동일 종목 '${stock}' 강사 실제 매매 = 정답)` : "동일 날짜 실전매매 관련 이미지"}`
+    ? `\n- 이후 ${liveImgCount}장 = ${liveImgIsSameStock ? `교본 차트(동일 날짜·동일 종목 '${stock}' 강사 실제 매매 = 정답)` : "동일 날짜 실전매매 관련 이미지"}` +
+      (liveImgDropped ? ` (교본 이미지 ${liveImgDropped}장은 요청 용량 한도로 제외됨)` : "")
     : "";
   return (
     `[세트] 종목:${stock} 날짜:${date}${dayLabel} — 기록 ${items.length}건 (키움 0328 기준 기법별 분리)\n` +

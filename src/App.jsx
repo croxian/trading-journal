@@ -585,6 +585,46 @@ const extractKakaoText = async (file) => {
 };
 
 // 이미지를 JPEG로 압축/리사이즈 (대용량 이미지 → API 요청 크기 초과 방지)
+// ── AI 전송용 이미지: 장수 제한 대신 '요청 용량' 기준 ──
+// Claude는 긴 변 약 1568px 초과 이미지를 어차피 줄여서 보므로 그 크기로 재인코딩해 보냄(저장된 원본은 그대로)
+const AI_IMG_PX = 1568;
+const _shrinkCache = new Map();
+const shrinkForAI = (b64) => new Promise((resolve) => {
+  if (!b64) return resolve(b64);
+  const key = `${b64.length}:${b64.slice(-64)}`;
+  if (_shrinkCache.has(key)) return resolve(_shrinkCache.get(key));
+  const img = new Image();
+  img.onload = () => {
+    try {
+      const sc = Math.min(1, AI_IMG_PX / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      let out = c.toDataURL("image/jpeg", 0.88).split(",")[1];
+      if (!out || out.length >= b64.length) out = b64;
+      if (_shrinkCache.size > 300) _shrinkCache.clear();
+      _shrinkCache.set(key, out); resolve(out);
+    } catch { resolve(b64); }
+  };
+  img.onerror = () => resolve(b64);
+  img.src = `data:image/jpeg;base64,${b64}`;
+});
+// 앱의 AI 요청은 Vercel 서버 함수를 거치는데 요청 1건 한도가 4.5MB → 여유를 두고 4.2MB 안에서 이미지를 채움(API 한도 100장)
+const AI_REQ_LIMIT = 4_200_000;
+const AI_MAX_IMGS = 95;
+const jsonBytes = (v) => new TextEncoder().encode(JSON.stringify(v)).length;
+const imgBlock = (d) => ({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: d } });
+// imgs: 우선순위 순 base64 → 축소 후 예산(otherBytes 제외 나머지) 안에 들어가는 것만. {fit, dropped}
+const fitImagesForAI = async (imgs, otherBytes, maxCount = AI_MAX_IMGS) => {
+  const fit = []; let used = otherBytes + 30000, dropped = 0;
+  for (const b of imgs) {
+    const d = await shrinkForAI(b);
+    if (fit.length >= maxCount || used + d.length + 200 > AI_REQ_LIMIT) { dropped++; continue; }
+    used += d.length + 200; fit.push(d);
+  }
+  return { fit, dropped };
+};
+
 const compressImage = (file, maxPx = 2048) => new Promise((resolve, reject) => {
   const reader = new FileReader();
   reader.onerror = () => reject(new Error("파일 읽기 실패"));
@@ -1964,17 +2004,23 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
           const stocks = stockList(t.stock);
           let picked = imgs.filter(im => imgStock(im, stocks) && matchStock(imgStock(im, stocks), head.stock));
           if (!picked.length) picked = imgs;
-          picked.slice(0, 2).forEach(im => liveImgs.push(im.d));
+          picked.forEach(im => liveImgs.push(im.d));
         }
       } catch {}
       const dayIdx = dayOfWeek(head.date);
+      const deepArgs = {
+        stock: head.stock, date: head.date, dayLabel: dayIdx !== null ? `(${DAY_NAMES[dayIdx]})` : "",
+        items, others: members.filter(t => !ids.includes(t.id)), setText: stripMissed(stripLec(row?.analysis)) || "",
+        lectures: lectureSubsetText(techniques, lecIds), marketSection, chartCount: charts.length, sameStockLiveNote,
+      };
+      const chartSm = [];
+      for (const d of charts) chartSm.push(await shrinkForAI(d));
+      const { fit: liveFit } = await fitImagesForAI(liveImgs,
+        jsonBytes([MISSED_DEEP_SYSTEM, buildMissedDeepText({ ...deepArgs, liveImgCount: liveImgs.length })]) + chartSm.reduce((n, d) => n + d.length + 200, 0),
+        AI_MAX_IMGS - chartSm.length);
       const content = [
-        ...[...charts, ...liveImgs].map(d => ({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: d } })),
-        { type: "text", text: buildMissedDeepText({
-          stock: head.stock, date: head.date, dayLabel: dayIdx !== null ? `(${DAY_NAMES[dayIdx]})` : "",
-          items, others: members.filter(t => !ids.includes(t.id)), setText: stripMissed(stripLec(row?.analysis)) || "",
-          lectures: lectureSubsetText(techniques, lecIds), marketSection, chartCount: charts.length, liveImgCount: liveImgs.length, sameStockLiveNote,
-        }) },
+        ...[...chartSm, ...liveFit].map(imgBlock),
+        { type: "text", text: buildMissedDeepText({ ...deepArgs, liveImgCount: liveFit.length }) },
       ];
       const result = await claude(MISSED_DEEP_SYSTEM, content, 32000, undefined, AI_MODEL, AI_EFFORT);
       const parts = parseMissedDeep(result, items.map(i => i.label));
@@ -2030,7 +2076,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
 
       // 5. 실전매매: '강의' 분류는 고정 블록(캐시), 동일 날짜/동일 종목 교본은 가변 블록
       let lectureLives = [], liveSection = "", sameStockLiveNote = "", liveImgIsSameStock = false;
-      const liveImageBlocks = [];
+      const liveImgSrc = [];   // 우선순위 순(내 종목 태그 우선) — 실제 첨부 장수는 요청 용량 예산으로 결정
       try {
         const allLive = (await sbGetLiveTrades()).map(rowToLiveTrade);
         lectureLives = allLive.filter(t => t.category === "강의");
@@ -2047,7 +2093,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
             const stocks = stockList(t.stock);
             let picked = imgs.filter(im => imgStock(im, stocks) && matchStock(imgStock(im, stocks), base.stock));
             if (!picked.length) picked = imgs;
-            picked.slice(0, 3).forEach(im => liveImageBlocks.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: im.d } }));
+            (sameStock.length ? picked : picked.slice(0, 3)).forEach(im => liveImgSrc.push(im.d));   // 같은 종목 교본은 전부, 다른 종목 참고는 교본당 3장
           }
         }
       } catch {}
@@ -2061,15 +2107,21 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
       }
 
       const dayIdx = dayOfWeek(base.date);
+      // 이미지: 내 차트 → 교본 순으로 요청 용량(4.2MB) 안에서 최대한(장수 제한 없음, 전송용 축소)
+      for (const c of charts) c.data = await shrinkForAI(c.data);
+      const staticText = buildStaticText({ techniques, lectureLives });
+      const varArgs = {
+        stock: base.stock, date: base.date, dayLabel: dayIdx !== null ? `(${DAY_NAMES[dayIdx]})` : "",
+        items, charts: charts.map(({ n, labels }) => ({ n, labels })), liveImgIsSameStock,
+        marketSection, liveSection, sameStockLiveNote, pastTrades, correctionsCtx,
+      };
+      const otherBytes = jsonBytes([SET_SYSTEM, staticText, buildSetVariableText({ ...varArgs, liveImgCount: liveImgSrc.length })]) + charts.reduce((n, c) => n + c.data.length + 200, 0);
+      const { fit: liveFit, dropped: liveDropped } = await fitImagesForAI(liveImgSrc, otherBytes, AI_MAX_IMGS - charts.length);
       const content = [
-        { type: "text", text: buildStaticText({ techniques, lectureLives }), cache_control: { type: "ephemeral" } },
-        ...charts.map(c => ({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: c.data } })),
-        ...liveImageBlocks,
-        { type: "text", text: buildSetVariableText({
-          stock: base.stock, date: base.date, dayLabel: dayIdx !== null ? `(${DAY_NAMES[dayIdx]})` : "",
-          items, charts: charts.map(({ n, labels }) => ({ n, labels })), liveImgCount: liveImageBlocks.length, liveImgIsSameStock,
-          marketSection, liveSection, sameStockLiveNote, pastTrades, correctionsCtx,
-        }) },
+        { type: "text", text: staticText, cache_control: { type: "ephemeral" } },
+        ...charts.map(c => imgBlock(c.data)),
+        ...liveFit.map(imgBlock),
+        { type: "text", text: buildSetVariableText({ ...varArgs, liveImgCount: liveFit.length, liveImgDropped: liveDropped }) },
       ];
       // 세트 분석은 추론+기록별 6항목이 길어 24000에서 끝(DATA)이 잘린 사례가 있어 여유 있게
       const result = await claude(SET_SYSTEM, content, 48000, undefined, AI_MODEL, AI_EFFORT);
@@ -3954,8 +4006,23 @@ function RealTradeTab({ techniques = [], onOpenLecture, onBg }) {
       // 차트 이미지 로딩(목록엔 이미지 제외 → 개별 로딩). 차트의 B/S를 강의록+당일 카톡 기반으로 분석
       let imgs = target.images?.length ? target.images : [];
       if (!imgs.length) { try { imgs = await sbGetLiveImages(target.id); } catch {} }
-      const chartNote = imgs.length
-        ? `[첨부 차트 이미지 ${imgs.length}장] 이 실전매매(강사 교본)의 차트다. 아래 규칙으로 B/S를 분석할 것:\n` +
+      const stocks = stockList(target.stock);
+      const tagOf = (i) => imgStock(imgs[i], stocks) || "미지정(차트 상단 인쇄 종목명으로 판단)";
+      // 장수 제한 없음: 전송용 축소 후, 본 분석에 앞쪽부터 용량(4.2MB) 안에서 최대한 첨부하고
+      // 남는 이미지는 묶음별로 먼저 '이미지 노트'(보이는 내용 정리)를 만들어 본 분석에 텍스트로 넘김 → 모든 이미지가 한 번씩 반영
+      const small = [];
+      for (const im of imgs) small.push(await shrinkForAI(im.d));
+      const N = small.length;
+      const sysMain = isLecture
+        ? "주식 매매 강의(교육) 정리 전문가. 강사가 남긴 강의/원칙 메시지를 핵심 원칙·기준·적용법·주의사항으로 구조화하고 관련 강의록 기법과 연결한다. 강의에 없는 내용을 일반론으로 지어내지 않는다."
+        : "주식 실전매매 분석 전문가. 강사(교본)의 카카오톡 매매 메시지와 차트의 B/S를 강의록 기법에 근거해 분석한다. 강의록에 없는 내용을 일반론으로 단정하지 않고, 차트에서 실제로 보이는 것만 사용한다.";
+      const imgHead = (k, noted) => {
+        if (!N) return "";
+        const att = k ? `${k === N ? `${N}장 모두` : `1~${k}번`} 첨부` : "직접 첨부 없음";
+        return `전체 ${N}장 중 ${att}${noted ? ` · ${k + 1}~${N}번은 아래 [이미지 노트]로 정리됨(먼저 이미지를 보고 정리한 내용)` : ""}`;
+      };
+      const chartNoteOf = (k, noted) => N
+        ? `[첨부 차트 이미지 — ${imgHead(k, noted)}] 이 실전매매(강사 교본)의 차트다. 아래 규칙으로 B/S를 분석할 것:\n` +
           `- 파란/빨간 오각형(B/S 글자)은 강사가 실제 체결한 매수(B)/매도(S) 지점이며, 이 강사의 B/S가 곧 정답매매(모범 답안)다. 차트는 좌→우 시간순(왼쪽=과거).\n` +
           `- 실전매매 차트엔 네모/동그라미(정답매매 표식)가 없다. 정답 타점을 따로 찾지 말고 강사의 B/S를 정답으로 간주할 것.\n` +
           `- 차트의 %주석·수평선·'최고/최저' 옆 가격은 손익이나 매매가가 아니다(HTS 자동표시). 진입/청산가는 B/S 마커 위치로 판단.\n` +
@@ -3963,41 +4030,68 @@ function RealTradeTab({ techniques = [], onOpenLecture, onBg }) {
           `- 가로축 라벨: '/' 포함(예 05/21)=날짜, '/' 없는 숫자(예 10,11,12)=시간(시). 09:00 이전/15:30 이후 캔들은 NXT 연장거래.\n` +
           `- ${CHART_TF_NOTE}\n` +
           `- 상단 가격대에 수평으로 일자로 붙어 마감하면 상한가 마감.\n` +
-          `- 각 차트의 종목: ${(() => { const stocks = stockList(target.stock); return imgs.slice(0, 4).map((im, i) => `차트${i + 1}=${imgStock(im, stocks) || "미지정(차트 상단 인쇄 종목명으로 판단)"}`).join(" / "); })()}. 종목이 여러 개면 종목별로 구분해 B/S를 분석하고, 미지정 차트는 상단(HTS/MTS)에 인쇄된 종목명으로 식별할 것.\n` +
+          (k ? `- 각 차트의 종목: ${Array.from({ length: k }, (_, i) => `차트${i + 1}=${tagOf(i)}`).join(" / ")}. 종목이 여러 개면 종목별로 구분해 B/S를 분석하고, 미지정 차트는 상단(HTS/MTS)에 인쇄된 종목명으로 식별할 것.\n` : "") +
           `이미지에서 실제로 보이는 것만 사용하고, 불확실하면 지어내지 말 것.`
         : `[첨부 차트 이미지] 없음. 차트/B/S 기반 분석은 하지 말고 당일 카톡 텍스트만으로 분석할 것.`;
-      const content = [];
-      imgs.slice(0, 4).forEach(im => content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: im.d } }));
-      const lessonImgNote = imgs.length ? `[첨부 이미지 ${imgs.length}장] 강의 자료(차트 예시·슬라이드·캡처). 참고하되 실제로 보이는 것만 쓰고 없는 내용을 지어내지 말 것.\n\n` : "";
-      content.push({ type: "text", text: isLecture
-        ? (`[강의(교육) 자료]\n제목:${target.title || "-"}${target.date ? ` (${target.date})` : ""}\n원문:\n${target.textContent}\n\n` +
-           lessonImgNote +
-           `[강의록DB]\n${techSummary || "(없음)"}\n\n` +
-           `위 강의 내용을 아래로 구조화(마크다운). 강의에 실제로 담긴 내용만 근거로 하고, 없는 내용을 일반론으로 지어내지 말 것:\n` +
-           `## 1. 핵심 요점 — 이 강의가 말하는 원칙·기준(수치·조건 포함)\n` +
-           `## 2. 실전 적용법 — 어떤 상황에서 어떻게 쓰는지\n` +
-           `## 3. 주의사항 / 흔한 실수\n` +
-           `## 4. 관련 강의록 기법과의 연결\n\n` +
-           `※ 응답 맨 끝에 다른 텍스트 없이 딱 한 줄: LECTURE:강의록ID  (이 강의와 가장 관련된 강의록 1개의 ID, 위 [강의록DB]의 [ID:...] 중에서. 없으면 생략)`)
-        : (`[현재 실전매매(강사 교본)]\n종목:${target.stock} 날짜:${target.date}\n당일 카톡 원문:\n${target.textContent}\n\n` +
-           `${chartNote}\n\n` +
-           `[강의록DB - 기본 지식. 이 매매에 가장 부합하는 기법을 근거로 활용]\n${techSummary || "(없음)"}\n\n` +
-           `[과거 실전매매 참고]\n${pastText || "(없음)"}\n\n` +
-           `아래 항목을 분석 (반드시 [강의록DB]와 당일 카톡을 기본 지식으로 삼을 것):\n` +
-           `1. 매매 의도 및 전략 (당일 카톡 근거)\n` +
-           `2. 차트 B/S 분석: 첨부 차트의 B(매수)/S(매도)는 강사의 정답매매다. 이를 강의록 기법 기준으로 분석 — 진입/청산 타이밍이 기법의 트리거·패턴·주의사항과 부합하는지 강의록 근거를 인용. 당일 카톡에서 강사가 밝힌 진입/청산 이유와 차트 B/S를 연결해 설명 (차트가 없으면 이 항목 생략)\n` +
-           `3. 강의록 기법과의 연관성 (가장 부합하는 기법 1개와 그 근거)\n` +
-           `4. 핵심 판단 근거 / 과거 유사 매매와 비교\n\n` +
-           `※ 응답 맨 끝에 아래 두 줄을 순서대로, 다른 텍스트 없이 정확히 이 형식으로만 출력:\n` +
-           `LECTURE:강의록ID  (이번 매매 상황에 가장 적합한 강의록 1개의 ID. 위 [강의록DB]의 [ID:...] 중에서 딱 하나만 고를 것. 적합한 것이 없으면 이 줄 생략)\n` +
-           `SIMILAR:[id1,id2,...]  (과거 유사 매매 중 가장 유사한 것 최대 5개의 ID)`)
-      });
-      const result = await claude(
-        isLecture
-          ? "주식 매매 강의(교육) 정리 전문가. 강사가 남긴 강의/원칙 메시지를 핵심 원칙·기준·적용법·주의사항으로 구조화하고 관련 강의록 기법과 연결한다. 강의에 없는 내용을 일반론으로 지어내지 않는다."
-          : "주식 실전매매 분석 전문가. 강사(교본)의 카카오톡 매매 메시지와 차트의 B/S를 강의록 기법에 근거해 분석한다. 강의록에 없는 내용을 일반론으로 단정하지 않고, 차트에서 실제로 보이는 것만 사용한다.",
-        content, 16000, undefined, AI_MODEL, AI_EFFORT
-      );
+      const mainText = (k, notes) => {
+        const noteSec = notes ? `[이미지 노트 — ${k + 1}~${N}번 이미지를 먼저 보고 정리한 내용]\n${notes}\n\n` : "";
+        return isLecture
+          ? (`[강의(교육) 자료]\n제목:${target.title || "-"}${target.date ? ` (${target.date})` : ""}\n원문:\n${target.textContent}\n\n` +
+             (N ? `[첨부 이미지 — ${imgHead(k, !!notes)}] 강의 자료(차트 예시·슬라이드·캡처). 참고하되 실제로 보이는 것만 쓰고 없는 내용을 지어내지 말 것.\n\n` : "") +
+             noteSec +
+             `[강의록DB]\n${techSummary || "(없음)"}\n\n` +
+             `위 강의 내용을 아래로 구조화(마크다운). 강의에 실제로 담긴 내용(원문·첨부 이미지·이미지 노트)만 근거로 하고, 없는 내용을 일반론으로 지어내지 말 것:\n` +
+             `## 1. 핵심 요점 — 이 강의가 말하는 원칙·기준(수치·조건 포함)\n` +
+             `## 2. 실전 적용법 — 어떤 상황에서 어떻게 쓰는지\n` +
+             `## 3. 주의사항 / 흔한 실수\n` +
+             `## 4. 관련 강의록 기법과의 연결\n\n` +
+             `※ 응답 맨 끝에 다른 텍스트 없이 딱 한 줄: LECTURE:강의록ID  (이 강의와 가장 관련된 강의록 1개의 ID, 위 [강의록DB]의 [ID:...] 중에서. 없으면 생략)`)
+          : (`[현재 실전매매(강사 교본)]\n종목:${target.stock} 날짜:${target.date}\n당일 카톡 원문:\n${target.textContent}\n\n` +
+             `${chartNoteOf(k, !!notes)}\n\n` +
+             noteSec +
+             `[강의록DB - 기본 지식. 이 매매에 가장 부합하는 기법을 근거로 활용]\n${techSummary || "(없음)"}\n\n` +
+             `[과거 실전매매 참고]\n${pastText || "(없음)"}\n\n` +
+             `아래 항목을 분석 (반드시 [강의록DB]와 당일 카톡을 기본 지식으로 삼을 것):\n` +
+             `1. 매매 의도 및 전략 (당일 카톡 근거)\n` +
+             `2. 차트 B/S 분석: 첨부 차트(와 이미지 노트)의 B(매수)/S(매도)는 강사의 정답매매다. 이를 강의록 기법 기준으로 분석 — 진입/청산 타이밍이 기법의 트리거·패턴·주의사항과 부합하는지 강의록 근거를 인용. 당일 카톡에서 강사가 밝힌 진입/청산 이유와 차트 B/S를 연결해 설명 (차트가 없으면 이 항목 생략)\n` +
+             `3. 강의록 기법과의 연관성 (가장 부합하는 기법 1개와 그 근거)\n` +
+             `4. 핵심 판단 근거 / 과거 유사 매매와 비교\n\n` +
+             `※ 응답 맨 끝에 아래 두 줄을 순서대로, 다른 텍스트 없이 정확히 이 형식으로만 출력:\n` +
+             `LECTURE:강의록ID  (이번 매매 상황에 가장 적합한 강의록 1개의 ID. 위 [강의록DB]의 [ID:...] 중에서 딱 하나만 고를 것. 적합한 것이 없으면 이 줄 생략)\n` +
+             `SIMILAR:[id1,id2,...]  (과거 유사 매매 중 가장 유사한 것 최대 5개의 ID)`);
+      };
+      // 본 분석에 직접 첨부할 앞쪽 k장(노트 자리 12KB/묶음 예약)
+      const restCount = (k) => N - k;
+      let k = 0, used = jsonBytes([sysMain, mainText(N, "")]) + 30000;
+      const noteReserve = (k2) => Math.ceil(restCount(k2) / 15) * 12000;
+      while (k < N && k < AI_MAX_IMGS && used + small[k].length + 200 + noteReserve(k + 1) <= AI_REQ_LIMIT) { used += small[k].length + 200; k++; }
+      // 남은 이미지 → 노트 묶음
+      let notes = "";
+      if (k < N) {
+        const noteHead = (a, z) => (isLecture
+          ? `[강의(교육) 자료] 제목:${target.title || "-"}${target.date ? ` (${target.date})` : ""}\n원문:\n${target.textContent}\n\n`
+          : `[실전매매(강사 교본)] 종목:${target.stock} 날짜:${target.date}\n당일 카톡 원문:\n${target.textContent}\n\n` +
+            `차트 규칙: B/S 오각형=강사 실제 매수/매도(정답매매). %주석·수평선·최고/최저 옆 가격은 매매가 아님. ${CHART_TF_NOTE}\n\n`) +
+          `첨부 이미지는 전체 ${N}장 중 ${a + 1}~${z + 1}번이다(순서대로${isLecture ? "" : `, 종목: ${Array.from({ length: z - a + 1 }, (_, j) => `${a + j + 1}번=${tagOf(a + j)}`).join(" / ")}`}).\n` +
+          `각 이미지에 실제로 보이는 내용을 이미지마다 '### 이미지 번호'로 빠짐없이 정리하라: 슬라이드·캡처의 글자(원문 그대로), 수치·조건, 차트면 종목명·봉 주기·패턴·B/S 위치·가격·시간. 보이지 않는 내용은 쓰지 말 것. 분석·평가는 하지 말고 내용만.`;
+        const groups = [];
+        let i = k;
+        while (i < N) {
+          const g = []; let u = jsonBytes(noteHead(i, Math.min(N - 1, i + AI_MAX_IMGS))) + 40000;
+          while (i < N && g.length < AI_MAX_IMGS && (g.length === 0 || u + small[i].length + 200 <= AI_REQ_LIMIT)) { u += small[i].length + 200; g.push(i); i++; }
+          groups.push(g);
+        }
+        for (let gi = 0; gi < groups.length; gi++) {
+          const g = groups[gi], a0 = g[0], z0 = g[g.length - 1];
+          onBg?.("l-single", `${isLecture ? "강의 정리" : "실전매매 분석"} 중… 이미지 노트 ${gi + 1}/${groups.length}묶음(${a0 + 1}~${z0 + 1}번)`);
+          const r = await claude("이미지 내용 정리 담당. 이미지에 실제로 보이는 내용만 빠짐없이 옮기고 추측하지 않는다.",
+            [...g.map(j => imgBlock(small[j])), { type: "text", text: noteHead(a0, z0) }], 12000, undefined, AI_MODEL, AI_EFFORT);
+          notes += `${notes ? "\n\n" : ""}${r.trim()}`;
+        }
+        onBg?.("l-single", isLecture ? "강의 정리 중… 본 정리" : "실전매매 분석 중… 본 분석");
+      }
+      const content = [...small.slice(0, k).map(imgBlock), { type: "text", text: mainText(k, notes) }];
+      const result = await claude(sysMain, content, 16000, undefined, AI_MODEL, AI_EFFORT);
       const simMatch = result.match(/SIMILAR:\[([\d,\s]*)\]/);
       const lecMatch = result.match(/LECTURE:\s*(\d+)/);
       const analysisText = result.replace(/\n?LECTURE:\s*\d+\s*/g, '').replace(/\n?SIMILAR:\[[\d,\s]*\]\s*$/, '').trim();

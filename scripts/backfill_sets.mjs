@@ -34,7 +34,7 @@ const sb = async (q, opt = {}) => {
 // ---- 앱과 동일한 변환/헬퍼
 const rowToTech = (r) => ({ id: r.id, name: r.name, category: r.category, timeframe: r.timeframe, entry: r.entry, exit: r.exit, pattern: r.pattern, tags: r.tags, rawInput: r.raw_input });
 const rowToTrade = (r) => ({ id: r.id, stock: r.stock, date: r.date, buyPrice: r.buy_price, sellPrice: r.sell_price, amount: r.amount, pnl: r.pnl, pnlRate: r.pnl_rate, reason: r.reason, technique: r.technique, memo: r.memo, aiAnalysis: r.ai_analysis });
-const rowToLive = (r) => ({ id: r.id, title: r.title, stock: r.stock, date: r.date, textContent: r.text_content, category: r.category });
+const rowToLive = (r) => ({ id: r.id, title: r.title, stock: r.stock, date: r.date, textContent: r.text_content, category: r.category, aiAnalysis: r.ai_analysis });
 const matchStock = (a, b) => {
   if (!a || !b) return false;
   const n = s => s.replace(/\s+/g, "").replace(/^\*/, "").toLowerCase();
@@ -109,7 +109,7 @@ if (!DRY) {
 const techniques = (await sb("techniques?select=*&order=id.asc")).map(rowToTech);
 const trades = (await sb("trades?select=id,stock,date,buy_price,sell_price,amount,pnl,pnl_rate,reason,technique,memo,ai_analysis&deleted_at=is.null&order=id.asc")).map(rowToTrade)
   .sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.id - a.id);   // 앱 목록 순서
-const lives = (await sb("live_trades?select=id,title,stock,date,text_content,category&deleted_at=is.null&order=id.desc")).map(rowToLive);
+const lives = (await sb("live_trades?select=id,title,stock,date,text_content,category,ai_analysis&deleted_at=is.null&order=id.desc")).map(rowToLive);
 const lectureLives = lives.filter(t => t.category === "강의");
 const corrs = await sb("analysis_corrections?select=*&order=created_at.desc&limit=10").catch(() => []);
 const STATIC = buildStaticText({ techniques, lectureLives });
