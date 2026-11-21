@@ -3775,6 +3775,9 @@ function RealTradeTab({ techniques = [], onOpenLecture, onBg }) {
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState("list");
   const [search, setSearch] = useState("");
+  // 분류 보기: 전체 / 강의만 / 매매만 — 기기별 기억(편의 설정)
+  const [catView, setCatView] = useState(() => { try { return localStorage.getItem("liveCatView") || "all"; } catch { return "all"; } });
+  const pickCat = (v) => { setCatView(v); try { localStorage.setItem("liveCatView", v); } catch {} };
   const [form, setForm] = useState({ title: "", stock: "", date: "", textContent: "", images: [], category: "" });
   const [feedback, setFeedback] = useState("");
   const [selected, setSelected] = useState(null);
@@ -4235,15 +4238,28 @@ function RealTradeTab({ techniques = [], onOpenLecture, onBg }) {
 
       {!loading && view === "list" && !selected && (() => {
         const matcher = makeMatcher(search);
-        const list = matcher ? lTrades.filter(t => matcher(`${t.textContent || ""} ${t.title || ""} ${t.stock || ""}`)) : lTrades;
+        const isLec = (t) => t.category === "강의";
+        const byCat = catView === "lecture" ? lTrades.filter(isLec) : catView === "trade" ? lTrades.filter(t => !isLec(t)) : lTrades;
+        const list = matcher ? byCat.filter(t => matcher(`${t.textContent || ""} ${t.title || ""} ${t.stock || ""}`)) : byCat;
         const terms = searchTerms(search);
+        const nLec = lTrades.filter(isLec).length;
         const searchBox = (
+          <>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+            {[["all", `전체 ${lTrades.length}`], ["lecture", `📚 강의 ${nLec}`], ["trade", `매매 ${lTrades.length - nLec}`]].map(([v, label]) => (
+              <button key={v} onClick={() => pickCat(v)}
+                style={{ padding: "4px 12px", borderRadius: 14, cursor: "pointer", fontSize: 12, fontWeight: catView === v ? 700 : 400,
+                  background: catView === v ? (v === "lecture" ? "#2e7d32" : "#4f8ef7") : "#1a1d27", color: catView === v ? "#fff" : "#aaa",
+                  border: `1px solid ${catView === v ? "transparent" : "#2a2d3a"}` }}>{label}</button>
+            ))}
+          </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 카톡 원문 검색 (띄어쓰기 그대로, and/or 연산)"
               style={{ flex: 1, background: "#13151f", border: "1px solid #2a2d3a", borderRadius: 6, color: "#e0e0e0", padding: "7px 10px", fontSize: 13, boxSizing: "border-box" }} />
             {search && <button onClick={() => setSearch("")} style={{ padding: "6px 10px", background: "#2a2d3a", border: "none", color: "#aaa", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>✕</button>}
             {matcher && <span style={{ fontSize: 12, color: "#888", whiteSpace: "nowrap" }}>{list.length}건</span>}
           </div>
+          </>
         );
         if (lTrades.length === 0) return <div style={{ color: "#555", marginTop: 40, textAlign: "center" }}>실전매매 기록 없음</div>;
         const matchedSnippet = (t) => {
@@ -4288,7 +4304,7 @@ function RealTradeTab({ techniques = [], onOpenLecture, onBg }) {
           </div>
         );
 
-        if (list.length === 0) return <div>{searchBox}<div style={{ color: "#555", marginTop: 30, textAlign: "center" }}>검색 결과 없음</div></div>;
+        if (list.length === 0) return <div>{searchBox}<div style={{ color: "#555", marginTop: 30, textAlign: "center" }}>{matcher ? "검색 결과 없음" : "이 분류에 기록 없음"}</div></div>;
         if (!groupByDate) return <div>{searchBox}<div style={{ display: "grid", gap: 8 }}>{list.map(TradeRow)}</div></div>;
         const grouped = list.reduce((acc, t) => { const d = t.date || "날짜없음"; (acc[d] = acc[d] || []).push(t); return acc; }, {});
         const sortedDates = [...new Set(list.map(t => t.date || "날짜없음"))];
