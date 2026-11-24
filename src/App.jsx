@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react
 import JSZip from "jszip";
 import * as XLSX from "xlsx";
 import { createClient } from "@supabase/supabase-js";
-import { TRADE_CATEGORIES, CHART_ANGLE_NOTE, CHART_TF_NOTE, SET_SYSTEM, buildStaticText, buildSetVariableText, parseSetResult, withMissed, parseMissed, stripMissed, AI_MISSED_PREFIX, buildMarketSection, buildMissedCard, isMissedCard, isAiMissedReason, lectureSubsetText, MISSED_DEEP_SYSTEM, buildMissedDeepText, parseMissedDeep } from "./setAnalysis.js";
+import { TRADE_CATEGORIES, CHART_ANGLE_NOTE, CHART_TF_NOTE, CHART_RULES_TEXT, SET_SYSTEM, buildStaticText, buildSetVariableText, parseSetResult, withMissed, parseMissed, stripMissed, AI_MISSED_PREFIX, buildMarketSection, buildMissedCard, isMissedCard, isAiMissedReason, lectureSubsetText, MISSED_DEEP_SYSTEM, buildMissedDeepText, parseMissedDeep } from "./setAnalysis.js";
 
 // ==================== 상수 / 설정 ====================
 const TABS = ["🏠 대시보드", "📝 매매일지", "📊 통계", "📚 강의록", "🔴 실전매매", "📅 월간복기"];
@@ -2407,11 +2407,13 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
 
       // 강사(실전매매) 매매: ① 같은 날·같은 종목 ② 흐름 기간 중 내가 기록 없는 날 ③ 같은 기간 다른 종목(테마 순환 참고)
       let liveFlowSection = "(기간 내 해당 종목 강사 매매 없음)", liveOtherSection = "(없음)";
+      let flowLivesArr = [];
       try {
         const lives = (await sbGetLiveTrades()).map(rowToLiveTrade)
           .filter(l => l.category !== "강의" && l.date && l.date >= d0 && l.date <= d1)
           .sort((a, b) => a.date.localeCompare(b.date));
         const flowLives = lives.filter(l => inFlow(l.stock));
+        flowLivesArr = flowLives;
         if (flowLives.length) liveFlowSection = flowLives.map(l => {
           const mine = targets.filter(t => t.date === l.date && stockList(l.stock).some(s => matchStock(s, t.stock)));
           const tag = mine.length ? `내 매매 있음: ${mine.map(t => `id:${t.id}`).join(", ")}` : "내 기록 없음 — 놓친 구간";
@@ -2428,12 +2430,13 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
           `${t.reason ? `\n  이유: ${t.reason}` : ""}${t.memo ? `\n  메모: ${t.memo}` : ""}` +
           `${a ? `\n  ▶기존 개별분석:\n${a}` : "\n  (개별분석 없음 — 매매이유만)"}`;
       }).join("\n\n");
-      const prompt =
+      const promptTemplate =
         `아래는 사용자가 고른 ${targets.length}건의 매매다(날짜순). 개별 매매를 따로 채점하지 말고, 종목/테마를 관통하는 '시간순 흐름(스토리)'으로 복기하라.\n` +
         `대상 종목: ${stocks.join(", ")} / 기간: ${d0}~${d1}\n\n` +
         `[선택 매매 — 날짜순]\n${items}\n\n` +
         `[강사 매매(실전매매 교본) — 같은 기간·같은 종목. 강사 B/S = 정답매매]\n${liveFlowSection}\n\n` +
         `[같은 기간 강사의 다른 종목 매매 — 테마 순환·시장 흐름 참고]\n${liveOtherSection}\n\n` +
+        "%%CHARTS%%" +
         `[강의록 목록]\n${techSummary || "(없음)"}\n\n` +
         `분석 방향(마크다운):\n` +
         `## 1. 흐름 요약 (이 종목/테마에서 기간 동안 무슨 일이 있었고, 내 대응이 어떻게 전개됐는지)\n` +
@@ -2443,13 +2446,76 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
         `   - 🙋 나: 실제 대응 1~2줄(해당 매매는 [YYYY-MM-DD 종목명](t:ID) 링크)\n` +
         `   - 💡 교훈: 다음에 할 행동 한 줄\n` +
         `   판정이모지: ✅ 교본과 일치 / ⚠️ 일부 차이 / ❌ 크게 어긋남 / 🔍 강사만 매매(놓친 구간) / ➖ 나만 매매(교본 근거 확인). 강사 매매가 없으면 이 섹션은 한 줄로 생략\n` +
+        `   차트가 있는 날은 🎓/🙋 줄을 차트의 실제 B/S 위치(시간·가격)로 쓰고 근거 차트를 (차트N)으로 표기. 내 차트의 네모/동그라미(정답 표식)도 있으면 비교에 반영. 차트로 확인되지 않는 내용은 카톡·매매이유 근거임을 밝힐 것\n` +
         `## 3. 포지션·판단 전개 (같은 종목이면 첫 진입→추가/청산→재진입의 일관성; 같은 테마 여러 종목이면 종목 선택·순환매 타이밍이 강의록 기법에 맞았는지)\n` +
         `## 4. 흐름 속 반복 실수 / 잘한 점 (개별 매매를 [YYYY-MM-DD 종목명](t:ID) 링크로 인용)\n` +
         `## 5. 다음에 같은 흐름을 만나면 — 체크리스트\n\n` +
         `※ 응답 맨 끝에 다른 텍스트 없이 딱 한 줄: LECTURE:강의록ID  (이 흐름에 가장 필요한 강의 1개의 ID, 위 [강의록 목록]의 [ID:...] 중에서)`;
-      const result = await claude(
-        "주식 단기매매 흐름 복기 코치. 여러 매매를 시간순 스토리로 엮어 포지션 전개·판단 일관성·반복 실수를 도출하고, 강사(교본) 매매를 정답 흐름으로 삼아 내 흐름과 비교한다. 반드시 제공된 실제 매매 데이터에 근거하고 날짜·종목을 인용한다.",
-        prompt, 16000, undefined, AI_MODEL, AI_EFFORT);
+      function buildPrompt(chartSec) { return promptTemplate.replace("%%CHARTS%%", () => chartSec); }
+      // ── 날짜별 차트: 그날 내 매매일지 차트 → 같은 종목 강사(교본) 차트(같은 이미지는 1장) ──
+      // 전송용 축소 후 요청 용량(4.2MB) 안에서 앞쪽부터 직접 첨부, 넘치면 묶음별 '차트 노트'로 먼저 정리해 텍스트로 넘김(빠지는 차트 없음)
+      progress("차트 준비 중…");
+      const chartList = [];   // {d, label}
+      const seenImg = new Set();
+      const pushImg = (d, label) => {
+        if (!d) return;
+        const key = `${d.length}:${d.slice(-64)}`;
+        if (seenImg.has(key)) return;
+        seenImg.add(key); chartList.push({ d, label });
+      };
+      const chartDates = [...new Set([...targets.map(t => t.date), ...flowLivesArr.map(l => l.date)])].filter(Boolean).sort();
+      for (const d of chartDates) {
+        for (const t of targets.filter(x => x.date === d)) {
+          let img = t.chartImg;
+          if (img === undefined) { try { img = await sbGetChartImg(t.id); } catch { img = null; } }
+          pushImg(img, `${d} 내 매매일지 차트 — ${t.stock}${t.technique ? ` ${t.technique}` : ""} (B/S=내 실제 체결, 네모/동그라미=정답매매 표식)`);
+        }
+        for (const l of flowLivesArr.filter(x => x.date === d)) {
+          let imgs = [];
+          try { imgs = await sbGetLiveImages(l.id); } catch { /* 이미지 없음 */ }
+          const ls = stockList(l.stock);
+          let picked = imgs.filter(im => { const st = imgStock(im, ls); return st && stocks.some(x => matchStock(st, x)); });
+          if (!picked.length) picked = imgs;
+          picked.forEach(im => pushImg(im.d, `${d} 강사 교본 차트 — ${imgStock(im, ls) || l.stock} (B/S=강사 실제 체결=정답)`));
+        }
+      }
+      for (const c of chartList) c.d = await shrinkForAI(c.d);
+      const N = chartList.length;
+      const chartSecOf = (k, notes) => N
+        ? `[첨부 차트 — 날짜별, 전체 ${N}장]\n` +
+          chartList.map((c, i) => `- 차트${i + 1} = ${c.label}${i < k ? "" : " → 아래 [차트 노트]로 정리됨"}`).join("\n") + "\n" +
+          `[차트 판독 규칙]\n${CHART_RULES_TEXT}\n\n` +
+          (notes ? `[차트 노트 — 차트${k + 1}~${N}을 먼저 보고 정리한 내용]\n${notes}\n\n` : "")
+        : "[첨부 차트] 없음 — 차트 기반 비교는 하지 말 것.\n\n";
+      const flowSys = "주식 단기매매 흐름 복기 코치. 여러 매매를 시간순 스토리로 엮어 포지션 전개·판단 일관성·반복 실수를 도출하고, 강사(교본) 매매를 정답 흐름으로 삼아 내 흐름과 비교한다. 반드시 제공된 실제 매매 데이터와 첨부 차트에 근거하고 날짜·종목을 인용한다. 차트에서 실제로 보이는 것만 쓴다.";
+      // 직접 첨부할 앞쪽 k장(노트 자리 묶음당 12KB 예약)
+      let k = 0, used = jsonBytes([flowSys, buildPrompt(chartSecOf(N, ""))]) + 30000;
+      const noteReserve = (k2) => Math.ceil((N - k2) / 15) * 12000;
+      while (k < N && k < AI_MAX_IMGS && used + chartList[k].d.length + 200 + noteReserve(k + 1) <= AI_REQ_LIMIT) { used += chartList[k].d.length + 200; k++; }
+      let notes = "";
+      if (k < N) {
+        const groups = [];
+        for (let i = k; i < N;) {
+          const g = []; let u = 60000;
+          while (i < N && g.length < AI_MAX_IMGS && (g.length === 0 || u + chartList[i].d.length + 200 <= AI_REQ_LIMIT)) { u += chartList[i].d.length + 200; g.push(i); i++; }
+          groups.push(g);
+        }
+        for (let gi = 0; gi < groups.length; gi++) {
+          const g = groups[gi];
+          progress(`차트 노트 ${gi + 1}/${groups.length}묶음(차트${g[0] + 1}~${g[g.length - 1] + 1})`);
+          const r = await claude("차트 내용 정리 담당. 차트에 실제로 보이는 것만 옮기고 추측하지 않는다.", [
+            ...g.map(j => imgBlock(chartList[j].d)),
+            { type: "text", text: `대상 종목: ${stocks.join(", ")} / 기간: ${d0}~${d1}\n첨부 차트(순서대로):\n${g.map(j => `- 차트${j + 1} = ${chartList[j].label}`).join("\n")}\n\n[차트 판독 규칙]\n${CHART_RULES_TEXT}\n\n` +
+              `각 차트를 '### 차트N (날짜 구분)'으로 정리하라: 봉 주기, 보이는 날짜·시간 구간, B/S 마커 각각의 시간·가격(가능한 만큼), 네모/동그라미 표식 위치, 당일 흐름(시가 위치·고점·저점·마감 형태). 평가·조언은 쓰지 말고 보이는 내용만.` },
+          ], 12000, undefined, AI_MODEL, AI_EFFORT);
+          notes += `${notes ? "\n\n" : ""}${r.trim()}`;
+        }
+      }
+      progress("분석 중…");
+
+      const result = await claude(flowSys,
+        [...chartList.slice(0, k).map(c => imgBlock(c.d)), { type: "text", text: buildPrompt(chartSecOf(k, notes)) }],
+        16000, undefined, AI_MODEL, AI_EFFORT);
       const lecMatch = result.match(/LECTURE:\s*(\d+)/);
       const recId = lecMatch ? parseInt(lecMatch[1]) : null;
       const content = result.replace(/\n?LECTURE:\s*\d+\s*$/, "").trim();
