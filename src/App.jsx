@@ -2430,45 +2430,47 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
           `${t.reason ? `\n  이유: ${t.reason}` : ""}${t.memo ? `\n  메모: ${t.memo}` : ""}` +
           `${a ? `\n  ▶기존 개별분석:\n${a}` : "\n  (개별분석 없음 — 매매이유만)"}`;
       }).join("\n\n");
-      const promptTemplate =
+      // ── 프롬프트 조각(전체 분석·파트 분석·종합에서 공용) ──
+      const ctxHead =
         `아래는 사용자가 고른 ${targets.length}건의 매매다(날짜순). 개별 매매를 따로 채점하지 말고, 종목/테마를 관통하는 '시간순 흐름(스토리)'으로 복기하라.\n` +
         `대상 종목: ${stocks.join(", ")} / 기간: ${d0}~${d1}\n\n` +
         `[선택 매매 — 날짜순]\n${items}\n\n` +
         `[강사 매매(실전매매 교본) — 같은 기간·같은 종목. 강사 B/S = 정답매매]\n${liveFlowSection}\n\n` +
-        `[같은 기간 강사의 다른 종목 매매 — 테마 순환·시장 흐름 참고]\n${liveOtherSection}\n\n` +
-        "%%CHARTS%%" +
-        `[강의록 목록]\n${techSummary || "(없음)"}\n\n` +
-        `분석 방향(마크다운):\n` +
-        `## 1. 흐름 요약 (이 종목/테마에서 기간 동안 무슨 일이 있었고, 내 대응이 어떻게 전개됐는지)\n` +
-        `## 2. 강사 흐름 대비 내 흐름 — 진입·재진입·이탈 타이밍 비교. 표 금지, 날짜마다 아래 '카드' 형식으로 쓸 것:\n` +
+        `[같은 기간 강사의 다른 종목 매매 — 테마 순환·시장 흐름 참고]\n${liveOtherSection}\n\n`;
+      const lecSec = `[강의록 목록]\n${techSummary || "(없음)"}\n\n`;
+      const sec1 = `## 1. 흐름 요약 (이 종목/테마에서 기간 동안 무슨 일이 있었고, 내 대응이 어떻게 전개됐는지)\n`;
+      const sec2Title = `## 2. 강사 흐름 대비 내 흐름 — 진입·재진입·이탈 타이밍 비교`;
+      const cardSpec =
         `   ### MM/DD 판정이모지 핵심 차이 한 줄(15자 안팎)\n` +
         `   - 🎓 강사: 실제 대응 1~2줄(가격·시간 위주, 근거 카톡은 핵심 한 구절만 인용)\n` +
         `   - 🙋 나: 실제 대응 1~2줄(해당 매매는 [YYYY-MM-DD 종목명](t:ID) 링크)\n` +
         `   - 💡 교훈: 다음에 할 행동 한 줄\n` +
         `   판정이모지: ✅ 교본과 일치 / ⚠️ 일부 차이 / ❌ 크게 어긋남 / 🔍 강사만 매매(놓친 구간) / ➖ 나만 매매(교본 근거 확인). 강사 매매가 없으면 이 섹션은 한 줄로 생략\n` +
-        `   차트가 있는 날은 🎓/🙋 줄을 차트의 실제 B/S 위치(시간·가격)로 쓰고 근거 차트를 (차트N)으로 표기. 내 차트의 네모/동그라미(정답 표식)도 있으면 비교에 반영. 차트로 확인되지 않는 내용은 카톡·매매이유 근거임을 밝힐 것\n` +
+        `   차트가 있는 날은 🎓/🙋 줄을 차트의 실제 B/S 위치(시간·가격)로 쓰고 근거 차트를 (차트N)으로 표기. 내 차트의 네모/동그라미(정답 표식)도 있으면 비교에 반영. 차트로 확인되지 않는 내용은 카톡·매매이유 근거임을 밝힐 것\n`;
+      const sec345 =
         `## 3. 포지션·판단 전개 (같은 종목이면 첫 진입→추가/청산→재진입의 일관성; 같은 테마 여러 종목이면 종목 선택·순환매 타이밍이 강의록 기법에 맞았는지)\n` +
         `## 4. 흐름 속 반복 실수 / 잘한 점 (개별 매매를 [YYYY-MM-DD 종목명](t:ID) 링크로 인용)\n` +
-        `## 5. 다음에 같은 흐름을 만나면 — 체크리스트\n\n` +
-        `※ 응답 맨 끝에 다른 텍스트 없이 딱 한 줄: LECTURE:강의록ID  (이 흐름에 가장 필요한 강의 1개의 ID, 위 [강의록 목록]의 [ID:...] 중에서)`;
-      function buildPrompt(chartSec) { return promptTemplate.replace("%%CHARTS%%", () => chartSec); }
+        `## 5. 다음에 같은 흐름을 만나면 — 체크리스트\n\n`;
+      const lecLine = `※ 응답 맨 끝에 다른 텍스트 없이 딱 한 줄: LECTURE:강의록ID  (이 흐름에 가장 필요한 강의 1개의 ID, 위 [강의록 목록]의 [ID:...] 중에서)`;
+      const buildPrompt = (chartSec) => ctxHead + chartSec + lecSec +
+        `분석 방향(마크다운):\n${sec1}${sec2Title}. 표 금지, 날짜마다 아래 '카드' 형식으로 쓸 것:\n${cardSpec}${sec345}${lecLine}`;
+
       // ── 날짜별 차트: 그날 내 매매일지 차트 → 같은 종목 강사(교본) 차트(같은 이미지는 1장) ──
-      // 전송용 축소 후 요청 용량(4.2MB) 안에서 앞쪽부터 직접 첨부, 넘치면 묶음별 '차트 노트'로 먼저 정리해 텍스트로 넘김(빠지는 차트 없음)
       progress("차트 준비 중…");
-      const chartList = [];   // {d, label}
+      const chartList = [];   // {d, label, date}
       const seenImg = new Set();
-      const pushImg = (d, label) => {
+      const pushImg = (d, label, date) => {
         if (!d) return;
         const key = `${d.length}:${d.slice(-64)}`;
         if (seenImg.has(key)) return;
-        seenImg.add(key); chartList.push({ d, label });
+        seenImg.add(key); chartList.push({ d, label, date });
       };
       const chartDates = [...new Set([...targets.map(t => t.date), ...flowLivesArr.map(l => l.date)])].filter(Boolean).sort();
       for (const d of chartDates) {
         for (const t of targets.filter(x => x.date === d)) {
           let img = t.chartImg;
           if (img === undefined) { try { img = await sbGetChartImg(t.id); } catch { img = null; } }
-          pushImg(img, `${d} 내 매매일지 차트 — ${t.stock}${t.technique ? ` ${t.technique}` : ""} (B/S=내 실제 체결, 네모/동그라미=정답매매 표식)`);
+          pushImg(img, `${d} 내 매매일지 차트 — ${t.stock}${t.technique ? ` ${t.technique}` : ""} (B/S=내 실제 체결, 네모/동그라미=정답매매 표식)`, d);
         }
         for (const l of flowLivesArr.filter(x => x.date === d)) {
           let imgs = [];
@@ -2476,46 +2478,65 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
           const ls = stockList(l.stock);
           let picked = imgs.filter(im => { const st = imgStock(im, ls); return st && stocks.some(x => matchStock(st, x)); });
           if (!picked.length) picked = imgs.filter(im => !imgStock(im, ls));   // 흐름 종목 태그가 없으면 태그 없는 이미지만(다른 종목 태그 제외)
-          picked.forEach(im => pushImg(im.d, `${d} 강사 교본 차트 — ${imgStock(im, ls) || l.stock} (B/S=강사 실제 체결=정답)`));
+          picked.forEach(im => pushImg(im.d, `${d} 강사 교본 차트 — ${imgStock(im, ls) || l.stock} (B/S=강사 실제 체결=정답)`, d));
         }
       }
       for (const c of chartList) c.d = await shrinkForAI(c.d);
-      const N = chartList.length;
-      const chartSecOf = (k, notes) => N
-        ? `[첨부 차트 — 날짜별, 전체 ${N}장]\n` +
-          chartList.map((c, i) => `- 차트${i + 1} = ${c.label}${i < k ? "" : " → 아래 [차트 노트]로 정리됨"}`).join("\n") + "\n" +
-          `[차트 판독 규칙]\n${CHART_RULES_TEXT}\n\n` +
-          (notes ? `[차트 노트 — 차트${k + 1}~${N}을 먼저 보고 정리한 내용]\n${notes}\n\n` : "")
-        : "[첨부 차트] 없음 — 차트 기반 비교는 하지 말 것.\n\n";
       const flowSys = "주식 단기매매 흐름 복기 코치. 여러 매매를 시간순 스토리로 엮어 포지션 전개·판단 일관성·반복 실수를 도출하고, 강사(교본) 매매를 정답 흐름으로 삼아 내 흐름과 비교한다. 반드시 제공된 실제 매매 데이터와 첨부 차트에 근거하고 날짜·종목을 인용한다. 차트에서 실제로 보이는 것만 쓴다.";
-      // 직접 첨부할 앞쪽 k장(노트 자리 묶음당 12KB 예약)
-      let k = 0, used = jsonBytes([flowSys, buildPrompt(chartSecOf(N, ""))]) + 30000;
-      const noteReserve = (k2) => Math.ceil((N - k2) / 15) * 12000;
-      while (k < N && k < AI_MAX_IMGS && used + chartList[k].d.length + 200 + noteReserve(k + 1) <= AI_REQ_LIMIT) { used += chartList[k].d.length + 200; k++; }
-      let notes = "";
-      if (k < N) {
-        const groups = [];
-        for (let i = k; i < N;) {
-          const g = []; let u = 60000;
-          while (i < N && g.length < AI_MAX_IMGS && (g.length === 0 || u + chartList[i].d.length + 200 <= AI_REQ_LIMIT)) { u += chartList[i].d.length + 200; g.push(i); i++; }
-          groups.push(g);
-        }
-        for (let gi = 0; gi < groups.length; gi++) {
-          const g = groups[gi];
-          progress(`차트 노트 ${gi + 1}/${groups.length}묶음(차트${g[0] + 1}~${g[g.length - 1] + 1})`);
-          const r = await claude("차트 내용 정리 담당. 차트에 실제로 보이는 것만 옮기고 추측하지 않는다.", [
-            ...g.map(j => imgBlock(chartList[j].d)),
-            { type: "text", text: `대상 종목: ${stocks.join(", ")} / 기간: ${d0}~${d1}\n첨부 차트(순서대로):\n${g.map(j => `- 차트${j + 1} = ${chartList[j].label}`).join("\n")}\n\n[차트 판독 규칙]\n${CHART_RULES_TEXT}\n\n` +
-              `각 차트를 '### 차트N (날짜 구분)'으로 정리하라: 봉 주기, 보이는 날짜·시간 구간, B/S 마커 각각의 시간·가격(가능한 만큼), 네모/동그라미 표식 위치, 당일 흐름(시가 위치·고점·저점·마감 형태). 평가·조언은 쓰지 말고 보이는 내용만.` },
-          ], 12000, undefined, AI_MODEL, AI_EFFORT);
-          notes += `${notes ? "\n\n" : ""}${r.trim()}`;
-        }
-      }
-      progress("분석 중…");
+      const chartSec = (list, dropped = 0) => list.length
+        ? `[첨부 차트 — 날짜별 ${list.length}장]\n${list.map((c, i) => `- 차트${i + 1} = ${c.label}`).join("\n")}\n` +
+          (dropped ? `(이 구간 차트 ${dropped}장은 요청 용량 한도로 제외됨)\n` : "") +
+          `[차트 판독 규칙]\n${CHART_RULES_TEXT}\n\n`
+        : "[첨부 차트] 없음 — 차트 기반 비교는 하지 말 것.\n\n";
+      const imgBytes = (list) => list.reduce((n, c) => n + c.d.length + 200, 0);
+      const baseBytes = jsonBytes([flowSys, buildPrompt(chartSec(chartList))]) + 30000;
 
-      const result = await claude(flowSys,
-        [...chartList.slice(0, k).map(c => imgBlock(c.d)), { type: "text", text: buildPrompt(chartSecOf(k, notes)) }],
-        16000, undefined, AI_MODEL, AI_EFFORT);
+      let result;
+      if (baseBytes + imgBytes(chartList) <= AI_REQ_LIMIT && chartList.length <= AI_MAX_IMGS) {
+        // 한 번에 모든 차트를 직접
+        progress("분석 중…");
+        result = await claude(flowSys, [...chartList.map(c => imgBlock(c.d)), { type: "text", text: buildPrompt(chartSec(chartList)) }],
+          16000, undefined, AI_MODEL, AI_EFFORT);
+      } else {
+        // 차트가 한 요청에 다 안 들어감 → 날짜 구간을 파트로 나눠 파트마다 그 구간 차트를 '직접' 보고 날짜 카드 작성.
+        // 각 파트는 전체 매매·카톡(텍스트)과 앞 파트 카드로 전체 흐름을 참고. 마지막에 텍스트로 전체 종합(1·3·4·5절)
+        const cap = AI_REQ_LIMIT - baseBytes - 80000;   // 파트당 이미지 예산(앞 파트 카드 자리 예약)
+        const total = imgBytes(chartList);
+        const P0 = Math.max(2, Math.ceil(total / cap));
+        const target = total / P0;
+        const parts = [];
+        let cur = { dates: [], list: [] };
+        for (const d of chartDates) {
+          const add = chartList.filter(c => c.date === d);
+          const curB = imgBytes(cur.list), addB = imgBytes(add);
+          if (cur.dates.length && (curB + addB > cap || (parts.length < P0 - 1 && curB + addB / 2 > target))) { parts.push(cur); cur = { dates: [], list: [] }; }
+          cur.dates.push(d); cur.list.push(...add);
+        }
+        if (cur.dates.length) parts.push(cur);
+        let cards = "";
+        for (let pi = 0; pi < parts.length; pi++) {
+          const pt = parts[pi], pd0 = pt.dates[0], pd1 = pt.dates[pt.dates.length - 1];
+          // 한 날짜의 차트만으로 예산을 넘는 드문 경우: 앞에서부터 들어가는 만큼만
+          const fit = []; let u = 0;
+          for (const c of pt.list) { if (fit.length < AI_MAX_IMGS && u + c.d.length + 200 <= cap) { fit.push(c); u += c.d.length + 200; } }
+          progress(`파트 ${pi + 1}/${parts.length} 분석 중(${pd0.slice(5)}~${pd1.slice(5)}, 차트 ${fit.length}장)`);
+          const partText = ctxHead + chartSec(fit, pt.list.length - fit.length) + lecSec +
+            `[파트 ${pi + 1}/${parts.length}] 이번에는 ${pd0}~${pd1} 날짜만 담당한다. 첨부 차트는 이 구간의 것뿐이고, 위 매매·카톡은 전체 흐름(${d0}~${d1}) 맥락으로 참고하라.\n` +
+            (cards ? `[앞 파트에서 작성한 날짜 카드 — 흐름 연결용, 다시 쓰지 말 것]\n${cards}\n\n` : "") +
+            `${pd0}~${pd1}에 해당하는 날짜마다 아래 '카드'만 날짜순으로 작성하라(머리말·다른 섹션 없이 카드만). 이 구간 밖 날짜의 카드는 쓰지 말 것. 강사·나 모두 매매가 없는 날은 생략:\n${cardSpec}`;
+          const r = await claude(flowSys, [...fit.map(c => imgBlock(c.d)), { type: "text", text: partText }], 12000, undefined, AI_MODEL, AI_EFFORT);
+          cards += `${cards ? "\n\n" : ""}${r.trim()}`;
+        }
+        progress("전체 흐름 종합 중…");
+        const synth = await claude(flowSys, [{ type: "text", text: ctxHead + lecSec +
+          `[날짜별 카드 — 차트가 많아 날짜를 ${parts.length}파트로 나눠 파트마다 그 구간 차트를 직접 보고 작성한 '## 2' 본문. 사실 근거로 활용]\n${cards}\n\n` +
+          `위 전체 흐름(${d0}~${d1})과 날짜 카드를 바탕으로 아래를 작성하라(마크다운). '## 2'는 이미 있으니 쓰지 말고 그 자리에 정확히 %%CARDS%% 한 줄만 둘 것:\n` +
+          `${sec1}%%CARDS%%\n${sec345}${lecLine}` }], 12000, undefined, AI_MODEL, AI_EFFORT);
+        const sec2 = `${sec2Title}\n\n> 차트가 많아 날짜를 ${parts.length}파트(${parts.map(p => `${p.dates[0].slice(5)}~${p.dates[p.dates.length - 1].slice(5)}`).join(" / ")})로 나눠 파트마다 그 구간 차트를 직접 보고 작성했습니다.\n\n${cards}\n`;
+        result = synth.includes("%%CARDS%%") ? synth.replace("%%CARDS%%", () => sec2)
+          : /^## 3\./m.test(synth) ? synth.replace(/^## 3\./m, () => `${sec2}\n## 3.`)
+          : `${synth}\n\n${sec2}`;
+      }
       const lecMatch = result.match(/LECTURE:\s*(\d+)/);
       const recId = lecMatch ? parseInt(lecMatch[1]) : null;
       const content = result.replace(/\n?LECTURE:\s*\d+\s*$/, "").trim();
