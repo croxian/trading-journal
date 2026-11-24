@@ -2003,7 +2003,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
           const imgs = await sbGetLiveImages(t.id);
           const stocks = stockList(t.stock);
           let picked = imgs.filter(im => imgStock(im, stocks) && matchStock(imgStock(im, stocks), head.stock));
-          if (!picked.length) picked = imgs;
+          if (!picked.length) picked = imgs.filter(im => !imgStock(im, stocks));   // 내 종목 태그가 없으면 태그 없는 이미지만(다른 종목으로 태그된 이미지는 제외)
           picked.forEach(im => liveImgs.push(im.d));
         }
       } catch {}
@@ -2092,7 +2092,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
             const imgs = await sbGetLiveImages(t.id);
             const stocks = stockList(t.stock);
             let picked = imgs.filter(im => imgStock(im, stocks) && matchStock(imgStock(im, stocks), base.stock));
-            if (!picked.length) picked = imgs;
+            if (!picked.length) picked = imgs.filter(im => !imgStock(im, stocks));   // 내 종목 태그가 없으면 태그 없는 이미지만(다른 종목으로 태그된 이미지는 제외)
             (sameStock.length ? picked : picked.slice(0, 3)).forEach(im => liveImgSrc.push(im.d));   // 같은 종목 교본은 전부, 다른 종목 참고는 교본당 3장
           }
         }
@@ -2475,7 +2475,7 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
           try { imgs = await sbGetLiveImages(l.id); } catch { /* 이미지 없음 */ }
           const ls = stockList(l.stock);
           let picked = imgs.filter(im => { const st = imgStock(im, ls); return st && stocks.some(x => matchStock(st, x)); });
-          if (!picked.length) picked = imgs;
+          if (!picked.length) picked = imgs.filter(im => !imgStock(im, ls));   // 흐름 종목 태그가 없으면 태그 없는 이미지만(다른 종목 태그 제외)
           picked.forEach(im => pushImg(im.d, `${d} 강사 교본 차트 — ${imgStock(im, ls) || l.stock} (B/S=강사 실제 체결=정답)`));
         }
       }
