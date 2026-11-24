@@ -477,7 +477,7 @@ const AI_EFFORT = "high";
 // 과부하(529)·거부(refusal)·빈 응답 시 대체 모델 (벤치 2위)
 const FALLBACK_MODEL = { "claude-opus-5-5": "claude-fable-5-1", "claude-fable-5-1": "claude-opus-5-5", "claude-fable-5": "claude-opus-5-5" };
 // 차트 판독 공통 규칙(CHART_ANGLE_NOTE·CHART_TF_NOTE)은 setAnalysis.js에서 import (세트 분석 프롬프트와 공용)
-const claude = async (system, userContent, maxTokens = 1000, temperature, model = "claude-sonnet-4-6", effort) => {
+const claude = async (system, userContent, maxTokens = 1000, temperature, model = "claude-sonnet-4-6", effort, meta) => {
   const headers = { "Content-Type": "application/json" };
   const RETRYABLE = new Set([500, 529]);
   // 1회 요청(500/529는 백오프 재시도). 성공 시 {text, stop} 반환, 그 외 HTTP 오류는 status 붙여 throw
@@ -517,6 +517,7 @@ const claude = async (system, userContent, maxTokens = 1000, temperature, model 
     if (e.status === 529 && fb) r = await post(fb, system, userContent);
     else throw e;
   }
+  if (meta) meta.stop = r.stop;   // 호출부가 출력 한도 잘림(max_tokens)을 확인할 수 있게
   if (r.text.trim()) return r.text;
   // 빈 응답/거부: ① 대체 모델(이미지 포함 그대로) → ② 첨부 이미지가 안전분류기 오탐을 일으킨 경우 대비, 이미지 빼고 텍스트만
   if (fb) {
@@ -532,6 +533,15 @@ const claude = async (system, userContent, maxTokens = 1000, temperature, model 
     : r.stop === "max_tokens"
       ? "출력 한도(max_tokens)에 도달해 본문이 비었습니다. 다시 시도해 주세요."
       : "빈 응답을 받았습니다. 잠시 후 다시 시도해 주세요.");
+};
+// 긴 출력(종합·리포트)용: 출력 한도에 걸려 잘리면 한도를 늘려 1회 재시도, 그래도 잘리면 표시를 붙여 반환
+const claudeFull = async (system, content, maxTokens, model, effort) => {
+  const m1 = {};
+  const t1 = await claude(system, content, maxTokens, undefined, model, effort, m1);
+  if (m1.stop !== "max_tokens") return t1;
+  const m2 = {};
+  const t2 = await claude(system, content, Math.min(maxTokens * 2, 64000), undefined, model, effort, m2);
+  return m2.stop === "max_tokens" ? `${t2}\n\n> ⚠️ 출력 한도에 걸려 여기서 잘렸습니다 — 다시 분석해 주세요.` : t2;
 };
 const parseJSON = async (text) => {
   const m = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
@@ -2495,8 +2505,8 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
       if (baseBytes + imgBytes(chartList) <= AI_REQ_LIMIT && chartList.length <= AI_MAX_IMGS) {
         // 한 번에 모든 차트를 직접
         progress("분석 중…");
-        result = await claude(flowSys, [...chartList.map(c => imgBlock(c.d)), { type: "text", text: buildPrompt(chartSec(chartList)) }],
-          16000, undefined, AI_MODEL, AI_EFFORT);
+        result = await claudeFull(flowSys, [...chartList.map(c => imgBlock(c.d)), { type: "text", text: buildPrompt(chartSec(chartList)) }],
+          32000, AI_MODEL, AI_EFFORT);
       } else {
         // 차트가 한 요청에 다 안 들어감 → 날짜 구간을 파트로 나눠 파트마다 그 구간 차트를 '직접' 보고 날짜 카드 작성.
         // 각 파트는 전체 매매·카톡(텍스트)과 앞 파트 카드로 전체 흐름을 참고. 마지막에 텍스트로 전체 종합(1·3·4·5절)
@@ -2524,14 +2534,14 @@ function JournalTab({ techniques, onOpenLecture, pendingTradeId, onPendingTradeC
             `[파트 ${pi + 1}/${parts.length}] 이번에는 ${pd0}~${pd1} 날짜만 담당한다. 첨부 차트는 이 구간의 것뿐이고, 위 매매·카톡은 전체 흐름(${d0}~${d1}) 맥락으로 참고하라.\n` +
             (cards ? `[앞 파트에서 작성한 날짜 카드 — 흐름 연결용, 다시 쓰지 말 것]\n${cards}\n\n` : "") +
             `${pd0}~${pd1}에 해당하는 날짜마다 아래 '카드'만 날짜순으로 작성하라(머리말·다른 섹션 없이 카드만). 이 구간 밖 날짜의 카드는 쓰지 말 것. 강사·나 모두 매매가 없는 날은 생략:\n${cardSpec}`;
-          const r = await claude(flowSys, [...fit.map(c => imgBlock(c.d)), { type: "text", text: partText }], 12000, undefined, AI_MODEL, AI_EFFORT);
+          const r = await claudeFull(flowSys, [...fit.map(c => imgBlock(c.d)), { type: "text", text: partText }], 24000, AI_MODEL, AI_EFFORT);
           cards += `${cards ? "\n\n" : ""}${r.trim()}`;
         }
         progress("전체 흐름 종합 중…");
-        const synth = await claude(flowSys, [{ type: "text", text: ctxHead + lecSec +
+        const synth = await claudeFull(flowSys, [{ type: "text", text: ctxHead + lecSec +
           `[날짜별 카드 — 차트가 많아 날짜를 ${parts.length}파트로 나눠 파트마다 그 구간 차트를 직접 보고 작성한 '## 2' 본문. 사실 근거로 활용]\n${cards}\n\n` +
           `위 전체 흐름(${d0}~${d1})과 날짜 카드를 바탕으로 아래를 작성하라(마크다운). '## 2'는 이미 있으니 쓰지 말고 그 자리에 정확히 %%CARDS%% 한 줄만 둘 것:\n` +
-          `${sec1}%%CARDS%%\n${sec345}${lecLine}` }], 12000, undefined, AI_MODEL, AI_EFFORT);
+          `${sec1}%%CARDS%%\n${sec345}${lecLine}` }], 32000, AI_MODEL, AI_EFFORT);
         const sec2 = `${sec2Title}\n\n> 차트가 많아 날짜를 ${parts.length}파트(${parts.map(p => `${p.dates[0].slice(5)}~${p.dates[p.dates.length - 1].slice(5)}`).join(" / ")})로 나눠 파트마다 그 구간 차트를 직접 보고 작성했습니다.\n\n${cards}\n`;
         result = synth.includes("%%CARDS%%") ? synth.replace("%%CARDS%%", () => sec2)
           : /^## 3\./m.test(synth) ? synth.replace(/^## 3\./m, () => `${sec2}\n## 3.`)
